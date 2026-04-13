@@ -271,8 +271,9 @@ export default function ProductionReadinessChecker() {
 
       const allLitmos = litmosCount === 14;
       const allShyftoff = shyftoffCount === SHYFTOFF_COURSES.length;
-      const readyStatus = allLitmos && allShyftoff && navAttended ? "ready"
-        : (litmosCount > 0 || shyftoffCount > 0) ? "partial" : "missing";
+      const navMet = navAttended || !(navData && navData.length > 0);
+      const readyStatus = allLitmos && navMet ? "ready"
+        : litmosCount > 0 ? "partial" : "missing";
 
       agents.push({
         name, sid, status, key,
@@ -307,7 +308,8 @@ export default function ProductionReadinessChecker() {
       total: results.length,
       ready: results.filter(a => a.readyStatus === "ready").length,
       litmosDone: results.filter(a => a.allLitmos).length,
-      shyftoffDone: results.filter(a => a.allShyftoff).length,
+      navAttended: results.filter(a => a.navAttended).length,
+      navAvailable: results.length > 0 && results[0].navAvailable,
     };
   }, [results]);
 
@@ -384,9 +386,9 @@ export default function ProductionReadinessChecker() {
           <>
             <div className="grid grid-cols-4 gap-3 mb-5">
               <StatCard label="Pipeline Total" value={stats.total} sub="Agents in CIP (excl. production)" color="#e2e8f0" />
-              <StatCard label="Production Ready" value={stats.ready} sub="All checks passed" color="#4ade80" />
+              <StatCard label="Production Ready" value={stats.ready} sub="Litmos 14/14 + Nav Meeting" color="#4ade80" />
               <StatCard label="Litmos Complete" value={stats.litmosDone} sub="14/14 required courses" color="#38bdf8" />
-              <StatCard label="ShyftOff Apps Done" value={stats.shyftoffDone} sub={`${SHYFTOFF_COURSES.length}/${SHYFTOFF_COURSES.length} app courses`} color="#a78bfa" />
+              <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#f59e0b" : "#475569"} />
             </div>
 
             <div className="flex items-center gap-3 mb-3">
@@ -422,7 +424,9 @@ export default function ProductionReadinessChecker() {
                       {activeTab === "details" && SHORT_LITMOS.map((s, i) => (
                         <th key={i} className="text-center px-1 py-2.5 font-semibold text-xs" style={{ color: "#475569", maxWidth: 40 }} title={REQUIRED_LITMOS[i]}>{s}</th>
                       ))}
-                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>ShyftOff Apps</th>
+                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#475569" }}>
+                        <span title="Data not yet reliable — shown for reference only">ShyftOff Apps *</span>
+                      </th>
                       <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>Nav Meeting</th>
                       <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>Status</th>
                     </tr>
@@ -453,7 +457,7 @@ export default function ProductionReadinessChecker() {
                           </td>
                         ))}
                         <td className="px-3 py-2.5 text-center">
-                          <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.allShyftoff ? "#4ade80" : a.shyftoffCount > 0 ? "#fbbf24" : "#f87171" }}>
+                          <span className="font-mono text-xs" style={{ color: "#475569" }} title="Data not yet reliable">
                             {a.shyftoffCount}/{a.shyftoffTotal}
                           </span>
                         </td>
@@ -495,17 +499,20 @@ export default function ProductionReadinessChecker() {
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#64748b" }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#475569" }}>
                       ShyftOff App Courses ({filtered[expandedRow].shyftoffCount}/{filtered[expandedRow].shyftoffTotal})
                     </div>
-                    <div className="space-y-1">
+                    <div className="rounded-md px-2 py-1.5 mb-2 text-xs" style={{ background: "#1e1b4b", color: "#818cf8", border: "1px solid #312e81" }}>
+                      Completion data not yet reliable from CIP export. Shown for reference only — not used in readiness calculation.
+                    </div>
+                    <div className="space-y-1 opacity-60">
                       {filtered[expandedRow].shyftoffDone.map((c, i) => (
                         <div key={i} className="flex items-center gap-2 text-xs">
                           <div className="w-3.5 h-3.5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
-                            style={{ background: c.completed ? "#064e3b" : "#7f1d1d", color: c.completed ? "#4ade80" : "#f87171" }}>
-                            {c.completed ? "✓" : "✗"}
+                            style={{ background: c.completed ? "#064e3b" : "#1e293b", color: c.completed ? "#4ade80" : "#475569" }}>
+                            {c.completed ? "✓" : "—"}
                           </div>
-                          <span style={{ color: c.completed ? "#94a3b8" : "#f87171" }}>{c.name}</span>
+                          <span style={{ color: "#64748b" }}>{c.name}</span>
                           {c.progress !== null && (
                             <span style={{ color: "#475569", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
                               {Math.round(c.progress * 100)}%
@@ -527,6 +534,7 @@ export default function ProductionReadinessChecker() {
 
             <div className="mt-3 text-xs text-center" style={{ color: "#334155" }}>
               Showing {filtered.length} of {results.length} agents • Click any row for full breakdown
+              <br />* ShyftOff App course data is shown for reference only — not used in readiness calculation
             </div>
           </>
         )}
