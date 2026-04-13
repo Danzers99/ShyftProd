@@ -81,13 +81,41 @@ function parseCSV(text) {
   });
 }
 
+function normalize(s) {
+  return (s || "").toLowerCase().replace(/\./g, "").replace(/\s+/g, "").trim();
+}
+
 function nameKey(first, last) {
-  return `${(first || "").toLowerCase().replace(/\./g, "").trim()}|${(last || "").toLowerCase().trim()}`;
+  return `${normalize(first)}|${normalize(last)}`;
 }
 
 function nameParts(fullName) {
   const p = (fullName || "").trim().split(/\s+/);
   return { first: p[0] || "", last: p[p.length - 1] || "" };
+}
+
+function candidateEmails(fullName) {
+  const parts = (fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return [];
+  const domain = "nationsbenefits.com";
+  const emails = new Set();
+  const last = parts[parts.length - 1];
+  // Standard: First.Last
+  emails.add(`${parts[0]}.${last}@${domain}`.toLowerCase());
+  // All parts joined as first: FirstMiddle.Last (e.g., "Sid Toria Melton" -> "SidToria.Melton")
+  if (parts.length > 2) {
+    const allButLast = parts.slice(0, -1).join("");
+    emails.add(`${allButLast}.${last}@${domain}`.toLowerCase());
+    // First.MiddleLast (e.g., "Jasmine Reid Lavonda" -> "Jasmine.ReidLavonda")
+    const allButFirst = parts.slice(1).join("");
+    emails.add(`${parts[0]}.${allButFirst}@${domain}`.toLowerCase());
+  }
+  // Handle dots in first name: "M.Cecilia Maseda" -> "Cecilia.Maseda"
+  if (parts[0].includes(".")) {
+    const afterDot = parts[0].split(".").pop();
+    if (afterDot) emails.add(`${afterDot}.${last}@${domain}`.toLowerCase());
+  }
+  return [...emails];
 }
 
 function parseCertProgress(raw) {
@@ -203,14 +231,22 @@ export default function ProductionReadinessChecker() {
 
     const prodKeys = new Set();
     (prodData || []).forEach(r => {
-      const { first, last } = nameParts(r.agent_nm || "");
+      const nm = (r.agent_nm || "").trim();
+      const { first, last } = nameParts(nm);
       prodKeys.add(nameKey(first, last));
+      // Also add joined-name keys for multi-part names
+      const pp = nm.split(/\s+/).filter(Boolean);
+      if (pp.length > 2) {
+        prodKeys.add(nameKey(pp.slice(0, -1).join(""), pp[pp.length - 1]));
+      }
     });
 
     const litmosMap = {};
+    const litmosEmailMap = {};
     litmosData.forEach(r => {
       const first = r["People.First Name"] || "";
       const last = r["People.Last Name"] || "";
+      const email = (r["People.Email"] || "").toLowerCase().trim();
       const key = nameKey(first, last);
       if (!litmosMap[key]) litmosMap[key] = { email: r["People.Email"] || "", courses: {} };
       const course = r["Course.Title"] || "";
@@ -219,6 +255,7 @@ export default function ProductionReadinessChecker() {
         completed: (r["Course User Results.Completed"] || "").toUpperCase() === "YES",
         date: r["Course User Results.Date Completed"] || "",
       };
+      if (email && !litmosEmailMap[email]) litmosEmailMap[email] = litmosMap[key];
     });
 
     const navKeys = new Set();
@@ -243,13 +280,34 @@ export default function ProductionReadinessChecker() {
 
       if (prodKeys.has(key)) return;
 
-      const litmos = litmosMap[key] || null;
-      let litmosAlt = null;
-      if (!litmos && first.includes(".")) {
+      // Try matching: 1) exact name key, 2) alt name combos, 3) email-based
+      let ldata = litmosMap[key] || null;
+
+      // Try alternate first name (strip dots: "M.Cecilia" -> "Cecilia")
+      if (!ldata && first.includes(".")) {
         const altFirst = first.split(".").pop();
-        litmosAlt = litmosMap[nameKey(altFirst, last)] || null;
+        ldata = litmosMap[nameKey(altFirst, last)] || null;
       }
-      const ldata = litmos || litmosAlt;
+
+      // For 3+ part names, try joining all-but-last as first ("Sid Toria" -> "sidtoria")
+      const parts = name.split(/\s+/).filter(Boolean);
+      if (!ldata && parts.length > 2) {
+        const joinedFirst = parts.slice(0, -1).join("");
+        ldata = litmosMap[nameKey(joinedFirst, last)] || null;
+        // Also try first + joined-rest as last ("Jasmine Reid Lavonda" -> "jasmine|reidlavonda")
+        if (!ldata) {
+          const joinedLast = parts.slice(1).join("");
+          ldata = litmosMap[nameKey(first, joinedLast)] || null;
+        }
+      }
+
+      // Email-based fallback: construct candidate emails and match against Litmos email index
+      if (!ldata) {
+        const candidates = candidateEmails(name);
+        for (const email of candidates) {
+          if (litmosEmailMap[email]) { ldata = litmosEmailMap[email]; break; }
+        }
+      }
 
       const litmosDone = REQUIRED_LITMOS.map(c => ({
         name: c,
