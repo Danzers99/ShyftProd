@@ -26,9 +26,7 @@ const SHYFTOFF_COURSES = [
   "Nations Benefits Certification",
   "Nations Benefits Pre-Production",
   "Nations Benefits Navigation Meeting Self-Guided",
-  "NRTC Foundations 2.0",
-  "NRTC Pre-Production 2.0",
-  "NRTC - CPNI 2026 Recertification",
+  "Nations-fiblue2026",
 ];
 
 function parseCSV(text) {
@@ -119,14 +117,23 @@ function candidateEmails(fullName) {
 }
 
 function parseCertProgress(raw) {
+  if (!raw || raw === "") return { pct: null, map: {} };
+  // New dashboard format: plain integer 0-100
+  const asNum = Number(raw);
+  if (!isNaN(asNum) && raw.trim().match(/^\d+$/)) {
+    return { pct: asNum, map: {} };
+  }
+  // Old CIP format: JSON array with per-course progress
   try {
     const arr = JSON.parse(raw.replace(/""/g, '"'));
     const map = {};
     arr.forEach(item => {
       map[item.course_code] = parseFloat(item.progress) || 0;
     });
-    return map;
-  } catch { return {}; }
+    const values = Object.values(map);
+    const pct = values.length ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100) : 0;
+    return { pct, map };
+  } catch { return { pct: null, map: {} }; }
 }
 
 function FileUpload({ label, sublabel, onFiles, multiple, files }) {
@@ -230,11 +237,13 @@ export default function ProductionReadinessChecker() {
     if (!litmosData || !cipData) return null;
 
     const prodKeys = new Set();
+    const prodSids = new Set();
     (prodData || []).forEach(r => {
-      const nm = (r.agent_nm || "").trim();
+      const nm = (r.agent_nm || r.agent_name || "").trim();
+      const sid = (r.shyftoff_id || "").trim().toUpperCase();
+      if (sid) prodSids.add(sid);
       const { first, last } = nameParts(nm);
       prodKeys.add(nameKey(first, last));
-      // Also add joined-name keys for multi-part names
       const pp = nm.split(/\s+/).filter(Boolean);
       if (pp.length > 2) {
         prodKeys.add(nameKey(pp.slice(0, -1).join(""), pp[pp.length - 1]));
@@ -270,44 +279,39 @@ export default function ProductionReadinessChecker() {
       if (email) navKeys.add(email.toLowerCase().trim());
     });
 
+    // Helper to find Litmos data for a given name
+    function findLitmos(name) {
+      const { first, last } = nameParts(name);
+      const key = nameKey(first, last);
+      let ldata = litmosMap[key] || null;
+      if (!ldata && first.includes(".")) {
+        ldata = litmosMap[nameKey(first.split(".").pop(), last)] || null;
+      }
+      const parts = name.split(/\s+/).filter(Boolean);
+      if (!ldata && parts.length > 2) {
+        ldata = litmosMap[nameKey(parts.slice(0, -1).join(""), last)] || null;
+        if (!ldata) ldata = litmosMap[nameKey(first, parts.slice(1).join(""))] || null;
+      }
+      if (!ldata) {
+        for (const email of candidateEmails(name)) {
+          if (litmosEmailMap[email]) { ldata = litmosEmailMap[email]; break; }
+        }
+      }
+      return ldata;
+    }
+
     const agents = [];
     cipData.forEach(row => {
-      const name = (row.agent_nm || "").trim();
+      const name = (row.agent_nm || row.agent_name || "").trim();
       const sid = (row.shyftoff_id || "").trim();
       const status = (row.status || "").trim();
       const { first, last } = nameParts(name);
       const key = nameKey(first, last);
 
-      if (prodKeys.has(key)) return;
+      // Exclude production agents (by name key or ShyftOff ID)
+      if (prodKeys.has(key) || prodSids.has(sid.toUpperCase())) return;
 
-      // Try matching: 1) exact name key, 2) alt name combos, 3) email-based
-      let ldata = litmosMap[key] || null;
-
-      // Try alternate first name (strip dots: "M.Cecilia" -> "Cecilia")
-      if (!ldata && first.includes(".")) {
-        const altFirst = first.split(".").pop();
-        ldata = litmosMap[nameKey(altFirst, last)] || null;
-      }
-
-      // For 3+ part names, try joining all-but-last as first ("Sid Toria" -> "sidtoria")
-      const parts = name.split(/\s+/).filter(Boolean);
-      if (!ldata && parts.length > 2) {
-        const joinedFirst = parts.slice(0, -1).join("");
-        ldata = litmosMap[nameKey(joinedFirst, last)] || null;
-        // Also try first + joined-rest as last ("Jasmine Reid Lavonda" -> "jasmine|reidlavonda")
-        if (!ldata) {
-          const joinedLast = parts.slice(1).join("");
-          ldata = litmosMap[nameKey(first, joinedLast)] || null;
-        }
-      }
-
-      // Email-based fallback: construct candidate emails and match against Litmos email index
-      if (!ldata) {
-        const candidates = candidateEmails(name);
-        for (const email of candidates) {
-          if (litmosEmailMap[email]) { ldata = litmosEmailMap[email]; break; }
-        }
-      }
+      const ldata = findLitmos(name);
 
       const litmosDone = REQUIRED_LITMOS.map(c => ({
         name: c,
@@ -317,29 +321,25 @@ export default function ProductionReadinessChecker() {
       }));
       const litmosCount = litmosDone.filter(c => c.completed).length;
 
-      const certProg = parseCertProgress(row.certification_progress || "[]");
-      const shyftoffDone = SHYFTOFF_COURSES.map(c => ({
-        name: c,
-        progress: certProg[c] ?? null,
-        completed: (certProg[c] ?? 0) >= 1,
-      }));
-      const shyftoffCount = shyftoffDone.filter(c => c.completed).length;
+      // ShyftOff certification progress (integer 0-100 from dashboard, or computed from JSON)
+      const cert = parseCertProgress(row.certification_progress || "");
+      const shyftoffPct = cert.pct;
+      const shyftoffComplete = shyftoffPct === 100;
 
       const navAttended = navKeys.has(key) || (ldata?.email && navKeys.has(ldata.email.toLowerCase()));
 
       const allLitmos = litmosCount === 14;
-      const allShyftoff = shyftoffCount === SHYFTOFF_COURSES.length;
       const navMet = navAttended || !(navData && navData.length > 0);
-      const readyStatus = allLitmos && navMet ? "ready"
-        : litmosCount > 0 ? "partial" : "missing";
+      const readyStatus = allLitmos && shyftoffComplete && navMet ? "ready"
+        : (litmosCount > 0 || (shyftoffPct !== null && shyftoffPct > 0)) ? "partial" : "missing";
 
       agents.push({
         name, sid, status, key,
         nbEmail: ldata?.email || "",
         litmosCount, litmosDone, litmosTotal: 14,
-        shyftoffCount, shyftoffDone, shyftoffTotal: SHYFTOFF_COURSES.length,
+        shyftoffPct, shyftoffComplete,
         navAttended, navAvailable: navData && navData.length > 0,
-        readyStatus, allLitmos, allShyftoff,
+        readyStatus, allLitmos,
       });
     });
 
@@ -353,6 +353,7 @@ export default function ProductionReadinessChecker() {
     if (filter === "partial") out = out.filter(a => a.readyStatus === "partial");
     if (filter === "missing") out = out.filter(a => a.readyStatus === "missing");
     if (filter === "litmos_done") out = out.filter(a => a.allLitmos);
+    if (filter === "shyftoff_done") out = out.filter(a => a.shyftoffComplete);
     if (search) {
       const s = search.toLowerCase();
       out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s) || a.nbEmail.toLowerCase().includes(s));
@@ -366,6 +367,7 @@ export default function ProductionReadinessChecker() {
       total: results.length,
       ready: results.filter(a => a.readyStatus === "ready").length,
       litmosDone: results.filter(a => a.allLitmos).length,
+      shyftoffDone: results.filter(a => a.shyftoffComplete).length,
       navAttended: results.filter(a => a.navAttended).length,
       navAvailable: results.length > 0 && results[0].navAvailable,
     };
@@ -373,10 +375,11 @@ export default function ProductionReadinessChecker() {
 
   const handleExport = () => {
     if (!filtered.length) return;
-    const headers = ["Agent Name","ShyftOff ID","CIP Status","NB Email","Litmos (done/14)","ShyftOff Apps (done/"+SHYFTOFF_COURSES.length+")","Nav Meeting","Readiness"];
+    const headers = ["Agent Name","ShyftOff ID","CIP Status","NB Email","Litmos (done/14)","ShyftOff Cert %","Nav Meeting","Readiness"];
     const rows = filtered.map(a => [
       a.name, a.sid, a.status, a.nbEmail,
-      `${a.litmosCount}/14`, `${a.shyftoffCount}/${a.shyftoffTotal}`,
+      `${a.litmosCount}/14`,
+      a.shyftoffPct !== null ? `${a.shyftoffPct}%` : "N/A",
       a.navAvailable ? (a.navAttended ? "YES" : "NO") : "N/A",
       a.readyStatus.toUpperCase()
     ]);
@@ -421,7 +424,7 @@ export default function ProductionReadinessChecker() {
       <div className="max-w-7xl mx-auto px-4 py-4">
         <div className="grid grid-cols-4 gap-3 mb-4">
           <FileUpload label="Litmos Course Data" sublabel="Required — CSV export with all 14 courses" onFiles={f => setLitmosFiles(f)} multiple files={litmosFiles} />
-          <FileUpload label="CIP Exports" sublabel="Required — Credentialed agents pipeline" onFiles={f => setCipFiles(f)} multiple files={cipFiles} />
+          <FileUpload label="Nesting / CIP Export" sublabel="Required — Dashboard or CIP agent export" onFiles={f => setCipFiles(f)} multiple files={cipFiles} />
           <FileUpload label="Production Exports" sublabel="Optional — Exclude current prod agents" onFiles={f => setProdFiles(f)} multiple files={prodFiles} />
           <FileUpload label="Nav Meeting Tracker" sublabel="Optional — CSV with Name/Email columns" onFiles={f => setNavFiles(f)} multiple={false} files={navFiles} />
         </div>
@@ -442,10 +445,11 @@ export default function ProductionReadinessChecker() {
 
         {hasData && stats && (
           <>
-            <div className="grid grid-cols-4 gap-3 mb-5">
-              <StatCard label="Pipeline Total" value={stats.total} sub="Agents in CIP (excl. production)" color="#e2e8f0" />
-              <StatCard label="Production Ready" value={stats.ready} sub="Litmos 14/14 + Nav Meeting" color="#4ade80" />
+            <div className="grid grid-cols-5 gap-3 mb-5">
+              <StatCard label="Pipeline Total" value={stats.total} sub="Agents in pipeline (excl. production)" color="#e2e8f0" />
+              <StatCard label="Production Ready" value={stats.ready} sub="All 3 pillars complete" color="#4ade80" />
               <StatCard label="Litmos Complete" value={stats.litmosDone} sub="14/14 required courses" color="#38bdf8" />
+              <StatCard label="ShyftOff Cert" value={stats.shyftoffDone} sub="100% certification progress" color="#a78bfa" />
               <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#f59e0b" : "#475569"} />
             </div>
 
@@ -459,6 +463,7 @@ export default function ProductionReadinessChecker() {
                   { key: "all", label: "All" },
                   { key: "ready", label: "Ready" },
                   { key: "litmos_done", label: "Litmos ✓" },
+                  { key: "shyftoff_done", label: "ShyftOff ✓" },
                   { key: "partial", label: "In Progress" },
                   { key: "missing", label: "Not Started" },
                 ].map(f => (
@@ -482,9 +487,7 @@ export default function ProductionReadinessChecker() {
                       {activeTab === "details" && SHORT_LITMOS.map((s, i) => (
                         <th key={i} className="text-center px-1 py-2.5 font-semibold text-xs" style={{ color: "#475569", maxWidth: 40 }} title={REQUIRED_LITMOS[i]}>{s}</th>
                       ))}
-                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#475569" }}>
-                        <span title="Data not yet reliable — shown for reference only">ShyftOff Apps *</span>
-                      </th>
+                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>ShyftOff Cert</th>
                       <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>Nav Meeting</th>
                       <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>Status</th>
                     </tr>
@@ -515,9 +518,13 @@ export default function ProductionReadinessChecker() {
                           </td>
                         ))}
                         <td className="px-3 py-2.5 text-center">
-                          <span className="font-mono text-xs" style={{ color: "#475569" }} title="Data not yet reliable">
-                            {a.shyftoffCount}/{a.shyftoffTotal}
-                          </span>
+                          {a.shyftoffPct !== null ? (
+                            <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.shyftoffComplete ? "#4ade80" : a.shyftoffPct > 0 ? "#fbbf24" : "#f87171" }}>
+                              {a.shyftoffPct}%
+                            </span>
+                          ) : (
+                            <span className="text-xs" style={{ color: "#475569" }}>N/A</span>
+                          )}
                         </td>
                         <td className="px-3 py-2.5 text-center">
                           {!a.navAvailable
@@ -557,28 +564,35 @@ export default function ProductionReadinessChecker() {
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#475569" }}>
-                      ShyftOff App Courses ({filtered[expandedRow].shyftoffCount}/{filtered[expandedRow].shyftoffTotal})
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#64748b" }}>
+                      ShyftOff Certification
                     </div>
-                    <div className="rounded-md px-2 py-1.5 mb-2 text-xs" style={{ background: "#1e1b4b", color: "#818cf8", border: "1px solid #312e81" }}>
-                      Completion data not yet reliable from CIP export. Shown for reference only — not used in readiness calculation.
-                    </div>
-                    <div className="space-y-1 opacity-60">
-                      {filtered[expandedRow].shyftoffDone.map((c, i) => (
-                        <div key={i} className="flex items-center gap-2 text-xs">
-                          <div className="w-3.5 h-3.5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
-                            style={{ background: c.completed ? "#064e3b" : "#1e293b", color: c.completed ? "#4ade80" : "#475569" }}>
-                            {c.completed ? "✓" : "—"}
+                    {filtered[expandedRow].shyftoffPct !== null ? (
+                      <div>
+                        <div className="flex items-center gap-3 mb-2">
+                          <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: "#1e293b" }}>
+                            <div className="h-full rounded-full transition-all" style={{
+                              width: `${filtered[expandedRow].shyftoffPct}%`,
+                              background: filtered[expandedRow].shyftoffComplete ? "#22c55e" : filtered[expandedRow].shyftoffPct > 0 ? "#eab308" : "#ef4444",
+                            }} />
                           </div>
-                          <span style={{ color: "#64748b" }}>{c.name}</span>
-                          {c.progress !== null && (
-                            <span style={{ color: "#475569", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
-                              {Math.round(c.progress * 100)}%
-                            </span>
-                          )}
+                          <span className="font-bold text-sm" style={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            color: filtered[expandedRow].shyftoffComplete ? "#4ade80" : filtered[expandedRow].shyftoffPct > 0 ? "#fbbf24" : "#f87171",
+                          }}>
+                            {filtered[expandedRow].shyftoffPct}%
+                          </span>
                         </div>
-                      ))}
-                    </div>
+                        <div className="text-xs" style={{ color: "#64748b" }}>
+                          Required courses: {SHYFTOFF_COURSES.join(", ")}
+                        </div>
+                        <div className="text-xs mt-1" style={{ color: filtered[expandedRow].shyftoffComplete ? "#4ade80" : "#fbbf24" }}>
+                          {filtered[expandedRow].shyftoffComplete ? "✓ All certification courses completed" : "In progress — 100% required for production readiness"}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs" style={{ color: "#475569" }}>No certification data available</div>
+                    )}
                     <div className="mt-3 text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#64748b" }}>
                       Navigation Meeting
                     </div>
@@ -592,7 +606,6 @@ export default function ProductionReadinessChecker() {
 
             <div className="mt-3 text-xs text-center" style={{ color: "#334155" }}>
               Showing {filtered.length} of {results.length} agents • Click any row for full breakdown
-              <br />* ShyftOff App course data is shown for reference only — not used in readiness calculation
             </div>
           </>
         )}
