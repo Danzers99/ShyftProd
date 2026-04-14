@@ -140,18 +140,18 @@ function FileUpload({ label, sublabel, onFiles, multiple, files }) {
   const ref = useRef();
   return (
     <div
-      className="relative border border-dashed rounded-lg p-3 cursor-pointer transition-all hover:border-sky-400 hover:bg-sky-950/20"
-      style={{ borderColor: files?.length ? "#22c55e" : "#334155" }}
+      className="relative border border-dashed rounded-lg p-3 cursor-pointer transition-all hover:border-purple-400 hover:bg-purple-950/20"
+      style={{ borderColor: files?.length ? "#8F68D3" : "#4D1F3B" }}
       onClick={() => ref.current?.click()}
     >
       <input ref={ref} type="file" accept=".csv" multiple={multiple}
         className="hidden" onChange={e => onFiles(Array.from(e.target.files))} />
-      <div className="text-sm font-semibold" style={{ color: files?.length ? "#4ade80" : "#94a3b8" }}>{label}</div>
-      <div className="text-xs mt-0.5" style={{ color: "#64748b" }}>{sublabel}</div>
+      <div className="text-sm font-semibold" style={{ color: files?.length ? "#8F68D3" : "#b8a5d4" }}>{label}</div>
+      <div className="text-xs mt-0.5" style={{ color: "#7a5f9a" }}>{sublabel}</div>
       {files?.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {files.map((f, i) => (
-            <span key={i} className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#064e3b", color: "#6ee7b7" }}>
+            <span key={i} className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#4D1F3B", color: "#FF66C4" }}>
               {f.name}
             </span>
           ))}
@@ -163,9 +163,9 @@ function FileUpload({ label, sublabel, onFiles, multiple, files }) {
 
 function Badge({ type }) {
   const styles = {
-    ready: { bg: "#064e3b", color: "#4ade80", text: "READY" },
-    partial: { bg: "#78350f", color: "#fbbf24", text: "IN PROGRESS" },
-    missing: { bg: "#7f1d1d", color: "#f87171", text: "NOT STARTED" },
+    ready: { bg: "#1a4d2e", color: "#4ade80", text: "READY" },
+    partial: { bg: "#4D1F3B", color: "#FFE566", text: "IN PROGRESS" },
+    missing: { bg: "#3d1525", color: "#FF7866", text: "NOT STARTED" },
   };
   const s = styles[type] || styles.missing;
   return (
@@ -177,10 +177,10 @@ function Badge({ type }) {
 
 function StatCard({ label, value, sub, color }) {
   return (
-    <div className="rounded-xl p-4" style={{ background: "#0f172a", border: "1px solid #1e293b" }}>
-      <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#64748b" }}>{label}</div>
+    <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
+      <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>{label}</div>
       <div className="text-3xl font-black" style={{ color }}>{value}</div>
-      {sub && <div className="text-xs mt-1" style={{ color: "#94a3b8" }}>{sub}</div>}
+      {sub && <div className="text-xs mt-1" style={{ color: "#b8a5d4" }}>{sub}</div>}
     </div>
   );
 }
@@ -188,7 +188,7 @@ function StatCard({ label, value, sub, color }) {
 function CourseDot({ done, title }) {
   return (
     <div title={title} className="w-3 h-3 rounded-sm flex-shrink-0"
-      style={{ background: done ? "#22c55e" : "#dc2626", opacity: done ? 1 : 0.6 }} />
+      style={{ background: done ? "#22c55e" : "#FF7866", opacity: done ? 1 : 0.6 }} />
   );
 }
 
@@ -542,16 +542,16 @@ export default function ProductionReadinessChecker() {
   const hasData = results !== null;
 
   return (
-    <div className="min-h-screen" style={{ background: "#020617", color: "#e2e8f0", fontFamily: "'IBM Plex Sans', -apple-system, sans-serif" }}>
+    <div className="min-h-screen" style={{ background: "#27133A", color: "#E8DFF6", fontFamily: "'IBM Plex Sans', -apple-system, sans-serif" }}>
       <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet" />
 
-      <div className="border-b" style={{ borderColor: "#1e293b", background: "#0f172a" }}>
+      <div className="border-b" style={{ borderColor: "#3d2057", background: "#1a0d2e" }}>
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm" style={{ background: "#0ea5e9", color: "#020617" }}>NB</div>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm" style={{ background: "#8F68D3", color: "#27133A" }}>NB</div>
             <div>
               <div className="font-bold text-sm tracking-tight">Production Readiness Checker</div>
-              <div className="text-xs" style={{ color: "#64748b" }}>NationsBenefits Agent Pipeline</div>
+              <div className="text-xs" style={{ color: "#7a5f9a" }}>NationsBenefits Agent Pipeline</div>
             </div>
           </div>
           {hasData && (
@@ -559,7 +559,7 @@ export default function ProductionReadinessChecker() {
               {[{k:"dashboard",l:"Dashboard"},{k:"insights",l:"Pipeline Insights"},{k:"details",l:"Detail View"}].map(tab => (
                 <button key={tab.k} onClick={() => setActiveTab(tab.k)}
                   className="px-3 py-1.5 rounded-md text-xs font-semibold transition-all"
-                  style={{ background: activeTab === tab.k ? "#0ea5e9" : "transparent", color: activeTab === tab.k ? "#020617" : "#94a3b8" }}>
+                  style={{ background: activeTab === tab.k ? "#8F68D3" : "transparent", color: activeTab === tab.k ? "#27133A" : "#b8a5d4" }}>
                   {tab.l}
                 </button>
               ))}
@@ -581,15 +581,15 @@ export default function ProductionReadinessChecker() {
           <button onClick={handleProcess}
             disabled={!litmosFiles.length || !cipFiles.length || processing}
             className="px-5 py-2 rounded-lg text-sm font-bold transition-all disabled:opacity-30"
-            style={{ background: "#0ea5e9", color: "#020617" }}>
+            style={{ background: "#8F68D3", color: "#27133A" }}>
             {processing ? "Processing..." : "Analyze Readiness"}
           </button>
           {hasData && (
             <>
-              <button onClick={handleExport} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:bg-slate-800" style={{ borderColor: "#334155", color: "#94a3b8" }}>
+              <button onClick={handleExport} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:bg-purple-900/30" style={{ borderColor: "#4D1F3B", color: "#b8a5d4" }}>
                 Export CSV
               </button>
-              <button onClick={() => setShowEmail(true)} className="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:brightness-110" style={{ background: "#7c3aed", color: "#fff" }}>
+              <button onClick={() => setShowEmail(true)} className="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:brightness-110" style={{ background: "#FF66C4", color: "#fff" }}>
                 Generate Email
               </button>
             </>
@@ -599,56 +599,56 @@ export default function ProductionReadinessChecker() {
         {hasData && stats && (
           <>
             <div className="grid grid-cols-5 gap-3 mb-5">
-              <StatCard label="Pipeline Total" value={stats.total} sub="Agents in pipeline (excl. production)" color="#e2e8f0" />
+              <StatCard label="Pipeline Total" value={stats.total} sub="Agents in pipeline (excl. production)" color="#E8DFF6" />
               <StatCard label="Production Ready" value={stats.ready} sub="All 3 pillars complete" color="#4ade80" />
-              <StatCard label="Litmos Complete" value={stats.litmosDone} sub="14/14 required courses" color="#38bdf8" />
-              <StatCard label="ShyftOff Cert" value={stats.shyftoffDone} sub="100% certification progress" color="#a78bfa" />
-              <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#f59e0b" : "#475569"} />
+              <StatCard label="Litmos Complete" value={stats.litmosDone} sub="14/14 required courses" color="#8F68D3" />
+              <StatCard label="ShyftOff Cert" value={stats.shyftoffDone} sub="100% certification progress" color="#FF66C4" />
+              <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#FFE566" : "#5c3d7a"} />
             </div>
 
             {activeTab === "insights" && (
               <div className="grid grid-cols-2 gap-3 mb-5">
-                <div className="rounded-xl p-4" style={{ background: "#0f172a", border: "1px solid #1e293b" }}>
-                  <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#64748b" }}>Status Anomalies</div>
+                <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#7a5f9a" }}>Status Anomalies</div>
                   <div className="space-y-3">
-                    <button onClick={() => { setFilter("ghosts"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#7f1d1d22", border: "1px solid #7f1d1d" }}>
+                    <button onClick={() => { setFilter("ghosts"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#3d152522", border: "1px solid #4D1F3B" }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#f87171" }}>Nesting Without Credentials</span>
-                        <span className="text-2xl font-black" style={{ color: "#f87171" }}>{stats.ghosts}</span>
+                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Nesting Without Credentials</span>
+                        <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.ghosts}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#94a3b8" }}>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
                         Agents in "Nesting" but not in Litmos — no credentials. If they've completed NB Certification + BG cleared, they need to be credentialed first.
                       </div>
                     </button>
-                    <button onClick={() => { setFilter("account_issues"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#78350f22", border: "1px solid #78350f" }}>
+                    <button onClick={() => { setFilter("account_issues"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#4D1F3B22", border: "1px solid #4D1F3B" }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#fbbf24" }}>Account Issues</span>
-                        <span className="text-2xl font-black" style={{ color: "#fbbf24" }}>{stats.accountIssues}</span>
+                        <span className="text-sm font-bold" style={{ color: "#FFE566" }}>Account Issues</span>
+                        <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.accountIssues}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#94a3b8" }}>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
                         Background check not cleared (status: pending or created). These agents are blocked from progressing.
                       </div>
                     </button>
                   </div>
                 </div>
-                <div className="rounded-xl p-4" style={{ background: "#0f172a", border: "1px solid #1e293b" }}>
-                  <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#64748b" }}>Credential Queue</div>
+                <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#7a5f9a" }}>Credential Queue</div>
                   <div className="space-y-3">
-                    <button onClick={() => { setFilter("waiting_creds"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#0ea5e922", border: "1px solid #0c4a6e" }}>
+                    <button onClick={() => { setFilter("waiting_creds"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#794EC222", border: "1px solid #794EC2" }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#38bdf8" }}>Waiting for Credentials</span>
-                        <span className="text-2xl font-black" style={{ color: "#38bdf8" }}>{stats.waitingForCreds}</span>
+                        <span className="text-sm font-bold" style={{ color: "#8F68D3" }}>Waiting for Credentials</span>
+                        <span className="text-2xl font-black" style={{ color: "#E8DFF6" }}>{stats.waitingForCreds}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#94a3b8" }}>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
                         NB Certification 100% + BG check cleared but not yet in Litmos — should be added to the credentials list.
                       </div>
                     </button>
-                    <button onClick={() => { setFilter("stale"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#7f1d1d22", border: "1px solid #7f1d1d" }}>
+                    <button onClick={() => { setFilter("stale"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#4D1F3B22", border: "1px solid #4D1F3B" }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#fb923c" }}>Stale (3+ Weeks)</span>
-                        <span className="text-2xl font-black" style={{ color: "#fb923c" }}>{stats.staleWaiters}</span>
+                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Stale (3+ Weeks)</span>
+                        <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.staleWaiters}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#94a3b8" }}>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
                         NB Cert done + BG cleared but still not credentialed after 3+ weeks — usually means something is wrong with their account.
                       </div>
                     </button>
@@ -661,7 +661,7 @@ export default function ProductionReadinessChecker() {
               <input type="text" placeholder="Search by name, ID, or email..."
                 value={search} onChange={e => setSearch(e.target.value)}
                 className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
-                style={{ background: "#0f172a", border: "1px solid #1e293b", color: "#e2e8f0" }} />
+                style={{ background: "#1a0d2e", border: "1px solid #3d2057", color: "#E8DFF6" }} />
               <div className="flex gap-1">
                 {[
                   { key: "all", label: "All" },
@@ -676,52 +676,52 @@ export default function ProductionReadinessChecker() {
                 ].map(f => (
                   <button key={f.key} onClick={() => setFilter(f.key)}
                     className="px-3 py-1.5 rounded-md text-xs font-semibold transition-all"
-                    style={{ background: filter === f.key ? "#1e293b" : "transparent", color: filter === f.key ? "#e2e8f0" : "#64748b" }}>
+                    style={{ background: filter === f.key ? "#3d2057" : "transparent", color: filter === f.key ? "#E8DFF6" : "#7a5f9a" }}>
                     {f.label}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #1e293b" }}>
+            <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #3d2057" }}>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr style={{ background: "#0f172a" }}>
-                      <th className="text-left px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>Agent</th>
-                      <th className="text-left px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>CIP Status</th>
-                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>Litmos</th>
+                    <tr style={{ background: "#1a0d2e" }}>
+                      <th className="text-left px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Agent</th>
+                      <th className="text-left px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>CIP Status</th>
+                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Litmos</th>
                       {activeTab === "details" && SHORT_LITMOS.map((s, i) => (
-                        <th key={i} className="text-center px-1 py-2.5 font-semibold text-xs" style={{ color: "#475569", maxWidth: 40 }} title={REQUIRED_LITMOS[i]}>{s}</th>
+                        <th key={i} className="text-center px-1 py-2.5 font-semibold text-xs" style={{ color: "#5c3d7a", maxWidth: 40 }} title={REQUIRED_LITMOS[i]}>{s}</th>
                       ))}
-                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>ShyftOff Cert</th>
-                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>Nav Meeting</th>
-                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#64748b" }}>Status</th>
+                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>ShyftOff Cert</th>
+                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Nav Meeting</th>
+                      <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filtered.length === 0 ? (
-                      <tr><td colSpan={99} className="text-center py-8" style={{ color: "#475569" }}>No agents match current filters</td></tr>
+                      <tr><td colSpan={99} className="text-center py-8" style={{ color: "#5c3d7a" }}>No agents match current filters</td></tr>
                     ) : filtered.map((a, idx) => (
                       <tr key={a.key + idx}
                         className="cursor-pointer transition-all"
-                        style={{ background: idx % 2 === 0 ? "#020617" : "#0f172a", borderBottom: "1px solid #0f172a" }}
+                        style={{ background: idx % 2 === 0 ? "#27133A" : "#1a0d2e", borderBottom: "1px solid #1a0d2e" }}
                         onClick={() => setExpandedRow(expandedRow === idx ? null : idx)}
-                        onMouseEnter={e => e.currentTarget.style.background = "#1e293b"}
-                        onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? "#020617" : "#0f172a"}>
+                        onMouseEnter={e => e.currentTarget.style.background = "#3d2057"}
+                        onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? "#27133A" : "#1a0d2e"}>
                         <td className="px-3 py-2.5">
                           <div className="font-semibold">{a.name}</div>
-                          <div className="text-xs" style={{ color: "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>{a.sid}</div>
+                          <div className="text-xs" style={{ color: "#7a5f9a", fontFamily: "'IBM Plex Mono', monospace" }}>{a.sid}</div>
                           <div className="flex gap-1 mt-0.5 flex-wrap">
-                            {a.isGhost && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#7f1d1d", color: "#fca5a5", fontSize: 10 }}>NOT IN LITMOS</span>}
-                            {a.hasAccountIssue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#78350f", color: "#fcd34d", fontSize: 10 }}>BG: {a.bgStatus}</span>}
-                            {a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#7c2d12", color: "#fdba74", fontSize: 10 }}>STALE {a.daysSinceChange}d</span>}
-                            {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#0c4a6e", color: "#7dd3fc", fontSize: 10 }}>AWAITING CREDS</span>}
+                            {a.isGhost && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d1525", color: "#FF7866", fontSize: 10 }}>NOT IN LITMOS</span>}
+                            {a.hasAccountIssue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FFE566", fontSize: 10 }}>BG: {a.bgStatus}</span>}
+                            {a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FF7866", fontSize: 10 }}>STALE {a.daysSinceChange}d</span>}
+                            {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
                           </div>
                         </td>
-                        <td className="px-3 py-2.5 text-xs" style={{ color: "#94a3b8" }}>{a.status}</td>
+                        <td className="px-3 py-2.5 text-xs" style={{ color: "#b8a5d4" }}>{a.status}</td>
                         <td className="px-3 py-2.5 text-center">
-                          <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.allLitmos ? "#4ade80" : a.litmosCount > 0 ? "#fbbf24" : "#f87171" }}>
+                          <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.allLitmos ? "#4ade80" : a.litmosCount > 0 ? "#FFE566" : "#FF7866" }}>
                             {a.litmosCount}/14
                           </span>
                         </td>
@@ -732,19 +732,19 @@ export default function ProductionReadinessChecker() {
                         ))}
                         <td className="px-3 py-2.5 text-center">
                           {a.shyftoffPct !== null ? (
-                            <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.shyftoffComplete ? "#4ade80" : a.shyftoffPct > 0 ? "#fbbf24" : "#f87171" }}>
+                            <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.shyftoffComplete ? "#4ade80" : a.shyftoffPct > 0 ? "#FFE566" : "#FF7866" }}>
                               {a.shyftoffPct}%
                             </span>
                           ) : (
-                            <span className="text-xs" style={{ color: "#475569" }}>N/A</span>
+                            <span className="text-xs" style={{ color: "#5c3d7a" }}>N/A</span>
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-center">
                           {!a.navAvailable
-                            ? <span className="text-xs" style={{ color: "#475569" }}>N/A</span>
+                            ? <span className="text-xs" style={{ color: "#5c3d7a" }}>N/A</span>
                             : a.navAttended
                               ? <span style={{ color: "#4ade80" }}>✓</span>
-                              : <span style={{ color: "#f87171" }}>✗</span>
+                              : <span style={{ color: "#FF7866" }}>✗</span>
                           }
                         </td>
                         <td className="px-3 py-2.5 text-center"><Badge type={a.readyStatus} /></td>
@@ -756,88 +756,88 @@ export default function ProductionReadinessChecker() {
             </div>
 
             {expandedRow !== null && filtered[expandedRow] && (
-              <div className="mt-3 rounded-xl p-4" style={{ background: "#0f172a", border: "1px solid #1e293b" }}>
+              <div className="mt-3 rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
                 <div className="font-bold mb-3">{filtered[expandedRow].name} — Detail Breakdown</div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#64748b" }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
                       Litmos Courses ({filtered[expandedRow].litmosCount}/14)
                     </div>
                     <div className="space-y-1">
                       {filtered[expandedRow].litmosDone.map((c, i) => (
                         <div key={i} className="flex items-center gap-2 text-xs">
                           <div className="w-3.5 h-3.5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
-                            style={{ background: c.completed ? "#064e3b" : "#7f1d1d", color: c.completed ? "#4ade80" : "#f87171" }}>
+                            style={{ background: c.completed ? "#1a4d2e" : "#3d1525", color: c.completed ? "#4ade80" : "#FF7866" }}>
                             {c.completed ? "✓" : "✗"}
                           </div>
-                          <span style={{ color: c.completed ? "#94a3b8" : "#f87171" }}>{c.name}</span>
-                          {c.date && <span style={{ color: "#475569", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>{c.date.split(" ")[0]}</span>}
+                          <span style={{ color: c.completed ? "#b8a5d4" : "#FF7866" }}>{c.name}</span>
+                          {c.date && <span style={{ color: "#5c3d7a", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>{c.date.split(" ")[0]}</span>}
                         </div>
                       ))}
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#64748b" }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
                       ShyftOff Certification
                     </div>
                     {filtered[expandedRow].shyftoffPct !== null ? (
                       <div>
                         <div className="flex items-center gap-3 mb-2">
-                          <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: "#1e293b" }}>
+                          <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: "#3d2057" }}>
                             <div className="h-full rounded-full transition-all" style={{
                               width: `${filtered[expandedRow].shyftoffPct}%`,
-                              background: filtered[expandedRow].shyftoffComplete ? "#22c55e" : filtered[expandedRow].shyftoffPct > 0 ? "#eab308" : "#ef4444",
+                              background: filtered[expandedRow].shyftoffComplete ? "#22c55e" : filtered[expandedRow].shyftoffPct > 0 ? "#FFE566" : "#FF7866",
                             }} />
                           </div>
                           <span className="font-bold text-sm" style={{
                             fontFamily: "'IBM Plex Mono', monospace",
-                            color: filtered[expandedRow].shyftoffComplete ? "#4ade80" : filtered[expandedRow].shyftoffPct > 0 ? "#fbbf24" : "#f87171",
+                            color: filtered[expandedRow].shyftoffComplete ? "#4ade80" : filtered[expandedRow].shyftoffPct > 0 ? "#FFE566" : "#FF7866",
                           }}>
                             {filtered[expandedRow].shyftoffPct}%
                           </span>
                         </div>
-                        <div className="text-xs" style={{ color: "#64748b" }}>
+                        <div className="text-xs" style={{ color: "#7a5f9a" }}>
                           Required courses: {SHYFTOFF_COURSES.join(", ")}
                         </div>
-                        <div className="text-xs mt-1" style={{ color: filtered[expandedRow].shyftoffComplete ? "#4ade80" : "#fbbf24" }}>
+                        <div className="text-xs mt-1" style={{ color: filtered[expandedRow].shyftoffComplete ? "#4ade80" : "#FFE566" }}>
                           {filtered[expandedRow].shyftoffComplete ? "✓ All certification courses completed" : "In progress — 100% required for production readiness"}
                         </div>
                       </div>
                     ) : (
-                      <div className="text-xs" style={{ color: "#475569" }}>No certification data available</div>
+                      <div className="text-xs" style={{ color: "#5c3d7a" }}>No certification data available</div>
                     )}
-                    <div className="mt-3 text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#64748b" }}>
+                    <div className="mt-3 text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
                       Navigation Meeting
                     </div>
-                    <div className="text-xs" style={{ color: filtered[expandedRow].navAttended ? "#4ade80" : "#f87171" }}>
+                    <div className="text-xs" style={{ color: filtered[expandedRow].navAttended ? "#4ade80" : "#FF7866" }}>
                       {!filtered[expandedRow].navAvailable ? "No nav meeting data uploaded" : filtered[expandedRow].navAttended ? "✓ Attended" : "✗ Not found in attendance list"}
                     </div>
-                    <div className="mt-3 text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#64748b" }}>
+                    <div className="mt-3 text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
                       Pipeline Status
                     </div>
                     <div className="space-y-1 text-xs">
                       <div>
-                        <span style={{ color: "#64748b" }}>Has Credentials (in Litmos): </span>
-                        <span style={{ color: filtered[expandedRow].inLitmos ? "#4ade80" : "#f87171" }}>
+                        <span style={{ color: "#7a5f9a" }}>Has Credentials (in Litmos): </span>
+                        <span style={{ color: filtered[expandedRow].inLitmos ? "#4ade80" : "#FF7866" }}>
                           {filtered[expandedRow].inLitmos ? "Yes" : "No"}
                         </span>
                       </div>
                       <div>
-                        <span style={{ color: "#64748b" }}>CCAAS ID: </span>
-                        <span style={{ color: filtered[expandedRow].hasCcaas ? "#4ade80" : "#fbbf24" }}>
+                        <span style={{ color: "#7a5f9a" }}>CCAAS ID: </span>
+                        <span style={{ color: filtered[expandedRow].hasCcaas ? "#4ade80" : "#FFE566" }}>
                           {filtered[expandedRow].hasCcaas ? "Assigned" : "Not assigned"}
                         </span>
                       </div>
                       <div>
-                        <span style={{ color: "#64748b" }}>Background Check: </span>
-                        <span style={{ color: filtered[expandedRow].bgCleared ? "#4ade80" : "#fbbf24" }}>
+                        <span style={{ color: "#7a5f9a" }}>Background Check: </span>
+                        <span style={{ color: filtered[expandedRow].bgCleared ? "#4ade80" : "#FFE566" }}>
                           {filtered[expandedRow].bgStatus || "unknown"}
                         </span>
                       </div>
                       {filtered[expandedRow].daysSinceChange !== null && (
                         <div>
-                          <span style={{ color: "#64748b" }}>Days since last status change: </span>
-                          <span style={{ color: filtered[expandedRow].daysSinceChange >= 21 ? "#fb923c" : "#94a3b8" }}>
+                          <span style={{ color: "#7a5f9a" }}>Days since last status change: </span>
+                          <span style={{ color: filtered[expandedRow].daysSinceChange >= 21 ? "#FF7866" : "#b8a5d4" }}>
                             {filtered[expandedRow].daysSinceChange}d
                           </span>
                         </div>
@@ -845,18 +845,18 @@ export default function ProductionReadinessChecker() {
                       {(filtered[expandedRow].isGhost || filtered[expandedRow].isWaitingForCreds || filtered[expandedRow].hasAccountIssue) && (
                         <div className="mt-2 space-y-1">
                           {filtered[expandedRow].isGhost && (
-                            <div className="rounded px-2 py-1" style={{ background: "#7f1d1d33", border: "1px solid #7f1d1d" }}>
-                              <span style={{ color: "#fca5a5" }}>In Nesting but not in Litmos — likely doesn't have credentials and shouldn't be in this status</span>
+                            <div className="rounded px-2 py-1" style={{ background: "#3d152533", border: "1px solid #4D1F3B" }}>
+                              <span style={{ color: "#FF7866" }}>In Nesting but not in Litmos — likely doesn't have credentials and shouldn't be in this status</span>
                             </div>
                           )}
                           {filtered[expandedRow].isStaleWaiter && (
-                            <div className="rounded px-2 py-1" style={{ background: "#7c2d1233", border: "1px solid #7c2d12" }}>
-                              <span style={{ color: "#fdba74" }}>Waiting {filtered[expandedRow].daysSinceChange}+ days for credentials — likely account issue</span>
+                            <div className="rounded px-2 py-1" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B" }}>
+                              <span style={{ color: "#FF7866" }}>Waiting {filtered[expandedRow].daysSinceChange}+ days for credentials — likely account issue</span>
                             </div>
                           )}
                           {filtered[expandedRow].hasAccountIssue && (
-                            <div className="rounded px-2 py-1" style={{ background: "#78350f33", border: "1px solid #78350f" }}>
-                              <span style={{ color: "#fcd34d" }}>Background check status: {filtered[expandedRow].bgStatus} — blocking progress</span>
+                            <div className="rounded px-2 py-1" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B" }}>
+                              <span style={{ color: "#FFE566" }}>Background check status: {filtered[expandedRow].bgStatus} — blocking progress</span>
                             </div>
                           )}
                         </div>
@@ -867,7 +867,7 @@ export default function ProductionReadinessChecker() {
               </div>
             )}
 
-            <div className="mt-3 text-xs text-center" style={{ color: "#334155" }}>
+            <div className="mt-3 text-xs text-center" style={{ color: "#4D1F3B" }}>
               Showing {filtered.length} of {results.length} agents • Click any row for full breakdown
             </div>
           </>
@@ -876,8 +876,8 @@ export default function ProductionReadinessChecker() {
         {!hasData && (
           <div className="text-center py-16">
             <div className="text-5xl mb-3">📋</div>
-            <div className="text-lg font-bold mb-1" style={{ color: "#94a3b8" }}>Upload your data to get started</div>
-            <div className="text-sm" style={{ color: "#475569" }}>
+            <div className="text-lg font-bold mb-1" style={{ color: "#b8a5d4" }}>Upload your data to get started</div>
+            <div className="text-sm" style={{ color: "#5c3d7a" }}>
               Drop in your Litmos export and CIP files, then hit Analyze.<br />
               Optionally add production exports to exclude and nav meeting data.
             </div>
@@ -887,27 +887,27 @@ export default function ProductionReadinessChecker() {
 
       {showEmail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }} onClick={() => setShowEmail(false)}>
-          <div className="w-full max-w-2xl mx-4 rounded-xl overflow-hidden" style={{ background: "#0f172a", border: "1px solid #1e293b" }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: "1px solid #1e293b" }}>
+          <div className="w-full max-w-2xl mx-4 rounded-xl overflow-hidden" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
               <div className="font-bold text-sm">Pipeline Update Email</div>
-              <button onClick={() => setShowEmail(false)} className="text-lg" style={{ color: "#64748b" }}>&times;</button>
+              <button onClick={() => setShowEmail(false)} className="text-lg" style={{ color: "#7a5f9a" }}>&times;</button>
             </div>
-            <div className="px-5 py-3 space-y-2 text-xs" style={{ borderBottom: "1px solid #1e293b" }}>
-              <div><span style={{ color: "#64748b" }}>To: </span><span style={{ color: "#e2e8f0" }}>jaydencole@shyftoff.com</span></div>
-              <div><span style={{ color: "#64748b" }}>CC: </span><span style={{ color: "#e2e8f0" }}>davidmorales@shyftoff.com, ericyost@shyftoff.com</span></div>
-              <div><span style={{ color: "#64748b" }}>Subject: </span><span style={{ color: "#e2e8f0" }}>{emailSubject}</span></div>
+            <div className="px-5 py-3 space-y-2 text-xs" style={{ borderBottom: "1px solid #3d2057" }}>
+              <div><span style={{ color: "#7a5f9a" }}>To: </span><span style={{ color: "#E8DFF6" }}>jaydencole@shyftoff.com</span></div>
+              <div><span style={{ color: "#7a5f9a" }}>CC: </span><span style={{ color: "#E8DFF6" }}>davidmorales@shyftoff.com, ericyost@shyftoff.com</span></div>
+              <div><span style={{ color: "#7a5f9a" }}>Subject: </span><span style={{ color: "#E8DFF6" }}>{emailSubject}</span></div>
             </div>
             <div className="px-5 py-4 overflow-y-auto" style={{ maxHeight: "50vh" }}>
-              <pre className="text-xs whitespace-pre-wrap leading-relaxed" style={{ color: "#cbd5e1", fontFamily: "'IBM Plex Sans', sans-serif" }}>{emailBody}</pre>
+              <pre className="text-xs whitespace-pre-wrap leading-relaxed" style={{ color: "#d4c6eb", fontFamily: "'IBM Plex Sans', sans-serif" }}>{emailBody}</pre>
             </div>
-            <div className="flex gap-2 px-5 py-3" style={{ borderTop: "1px solid #1e293b" }}>
-              <button onClick={handleCopyEmail} className="px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#1e293b", color: "#e2e8f0" }}>
+            <div className="flex gap-2 px-5 py-3" style={{ borderTop: "1px solid #3d2057" }}>
+              <button onClick={handleCopyEmail} className="px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#3d2057", color: "#E8DFF6" }}>
                 Copy to Clipboard
               </button>
-              <button onClick={handleOpenMail} className="px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#7c3aed", color: "#fff" }}>
+              <button onClick={handleOpenMail} className="px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#FF66C4", color: "#fff" }}>
                 Open in Mail Client
               </button>
-              <button onClick={() => setShowEmail(false)} className="ml-auto px-4 py-2 rounded-lg text-xs font-semibold transition-all" style={{ color: "#64748b" }}>
+              <button onClick={() => setShowEmail(false)} className="ml-auto px-4 py-2 rounded-lg text-xs font-semibold transition-all" style={{ color: "#7a5f9a" }}>
                 Close
               </button>
             </div>
