@@ -513,7 +513,7 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#f87171" }}>{stats.ghosts}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#94a3b8" }}>
-                        Agents in "Nesting" status but not found in the Litmos export — they likely don't have credentials yet and shouldn't be in Nesting.
+                        Agents in "Nesting" but not in Litmos — no credentials. If they've completed NB Certification + BG cleared, they need to be credentialed first.
                       </div>
                     </button>
                     <button onClick={() => { setFilter("account_issues"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#78350f22", border: "1px solid #78350f" }}>
@@ -536,7 +536,7 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#38bdf8" }}>{stats.waitingForCreds}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#94a3b8" }}>
-                        Not in Litmos yet, BG cleared, ShyftOff cert 100% — nothing wrong, just need to be credentialed.
+                        NB Certification 100% + BG check cleared but not yet in Litmos — should be added to the credentials list.
                       </div>
                     </button>
                     <button onClick={() => { setFilter("stale"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#7f1d1d22", border: "1px solid #7f1d1d" }}>
@@ -545,7 +545,7 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#fb923c" }}>{stats.staleWaiters}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#94a3b8" }}>
-                        Waiting 3+ weeks for credentials — likely has an account issue that needs manual investigation.
+                        NB Cert done + BG cleared but still not credentialed after 3+ weeks — usually means something is wrong with their account.
                       </div>
                     </button>
                   </div>
