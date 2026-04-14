@@ -328,7 +328,8 @@ export default function ProductionReadinessChecker() {
       const navAttended = navKeys.has(key) || (ldata?.email && navKeys.has(ldata.email.toLowerCase()));
 
       // New fields for anomaly detection
-      const hasCreds = !!(row.ccaas_id || "").trim();
+      const hasCcaas = !!(row.ccaas_id || "").trim();
+      const inLitmos = ldata !== null;
       const bgStatus = (row.background_check_status || "").trim().toLowerCase();
       const bgCleared = bgStatus === "cleared";
       const createdAt = row.created_at ? new Date(row.created_at) : null;
@@ -343,8 +344,12 @@ export default function ProductionReadinessChecker() {
       const daysSinceCreated = createdAt ? Math.floor((now - createdAt) / 86400000) : null;
 
       // Anomaly flags
-      const isGhost = isNesting && !hasCreds;
-      const isWaitingForCreds = isRoster && bgCleared && shyftoffComplete && !hasCreds;
+      // Ghost = in Nesting but not in Litmos (no credentials — Litmos presence = has credentials)
+      const isGhost = isNesting && !inLitmos;
+      // Missing CCAAS = needs ccaas_id assigned before moving to production
+      const missingCcaas = !hasCcaas;
+      // Waiting for creds = everything done, BG cleared, just needs to be credentialed
+      const isWaitingForCreds = !inLitmos && bgCleared && shyftoffComplete;
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
       const hasAccountIssue = !bgCleared && bgStatus !== "";
 
@@ -360,7 +365,7 @@ export default function ProductionReadinessChecker() {
         shyftoffPct, shyftoffComplete,
         navAttended, navAvailable: navData && navData.length > 0,
         readyStatus, allLitmos,
-        hasCreds, bgStatus, bgCleared,
+        inLitmos, hasCcaas, missingCcaas, bgStatus, bgCleared,
         daysSinceChange, daysSinceCreated,
         isNesting, isRoster,
         isGhost, isWaitingForCreds, isStaleWaiter, hasAccountIssue,
@@ -407,7 +412,7 @@ export default function ProductionReadinessChecker() {
 
   const handleExport = () => {
     if (!filtered.length) return;
-    const headers = ["Agent Name","ShyftOff ID","CIP Status","NB Email","Litmos (done/14)","ShyftOff Cert %","Nav Meeting","Readiness","Has Credentials","BG Check","Days Since Change","Flags"];
+    const headers = ["Agent Name","ShyftOff ID","CIP Status","NB Email","Litmos (done/14)","ShyftOff Cert %","Nav Meeting","Readiness","In Litmos (Has Creds)","CCAAS ID","BG Check","Days Since Change","Flags"];
     const rows = filtered.map(a => {
       const flags = [];
       if (a.isGhost) flags.push("GHOST");
@@ -420,7 +425,8 @@ export default function ProductionReadinessChecker() {
         a.shyftoffPct !== null ? `${a.shyftoffPct}%` : "N/A",
         a.navAvailable ? (a.navAttended ? "YES" : "NO") : "N/A",
         a.readyStatus.toUpperCase(),
-        a.hasCreds ? "YES" : "NO",
+        a.inLitmos ? "YES" : "NO",
+        a.hasCcaas ? "YES" : "NO",
         a.bgStatus || "unknown",
         a.daysSinceChange !== null ? `${a.daysSinceChange}` : "N/A",
         flags.join("; ") || "",
@@ -507,7 +513,7 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#f87171" }}>{stats.ghosts}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#94a3b8" }}>
-                        Agents in "Nesting" status but missing a CCAAS ID. They may not actually have credentials to take calls.
+                        Agents in "Nesting" status but not found in the Litmos export — they likely don't have credentials yet and shouldn't be in Nesting.
                       </div>
                     </button>
                     <button onClick={() => { setFilter("account_issues"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#78350f22", border: "1px solid #78350f" }}>
@@ -530,7 +536,7 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#38bdf8" }}>{stats.waitingForCreds}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#94a3b8" }}>
-                        In Roster, BG cleared, ShyftOff cert 100% — nothing wrong, just need credentials issued.
+                        Not in Litmos yet, BG cleared, ShyftOff cert 100% — nothing wrong, just need to be credentialed.
                       </div>
                     </button>
                     <button onClick={() => { setFilter("stale"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#7f1d1d22", border: "1px solid #7f1d1d" }}>
@@ -603,7 +609,7 @@ export default function ProductionReadinessChecker() {
                           <div className="font-semibold">{a.name}</div>
                           <div className="text-xs" style={{ color: "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>{a.sid}</div>
                           <div className="flex gap-1 mt-0.5 flex-wrap">
-                            {a.isGhost && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#7f1d1d", color: "#fca5a5", fontSize: 10 }}>NO CREDS</span>}
+                            {a.isGhost && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#7f1d1d", color: "#fca5a5", fontSize: 10 }}>NOT IN LITMOS</span>}
                             {a.hasAccountIssue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#78350f", color: "#fcd34d", fontSize: 10 }}>BG: {a.bgStatus}</span>}
                             {a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#7c2d12", color: "#fdba74", fontSize: 10 }}>STALE {a.daysSinceChange}d</span>}
                             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#0c4a6e", color: "#7dd3fc", fontSize: 10 }}>AWAITING CREDS</span>}
@@ -707,9 +713,15 @@ export default function ProductionReadinessChecker() {
                     </div>
                     <div className="space-y-1 text-xs">
                       <div>
-                        <span style={{ color: "#64748b" }}>Credentials (CCAAS): </span>
-                        <span style={{ color: filtered[expandedRow].hasCreds ? "#4ade80" : "#f87171" }}>
-                          {filtered[expandedRow].hasCreds ? "Assigned" : "Not assigned"}
+                        <span style={{ color: "#64748b" }}>Has Credentials (in Litmos): </span>
+                        <span style={{ color: filtered[expandedRow].inLitmos ? "#4ade80" : "#f87171" }}>
+                          {filtered[expandedRow].inLitmos ? "Yes" : "No"}
+                        </span>
+                      </div>
+                      <div>
+                        <span style={{ color: "#64748b" }}>CCAAS ID: </span>
+                        <span style={{ color: filtered[expandedRow].hasCcaas ? "#4ade80" : "#fbbf24" }}>
+                          {filtered[expandedRow].hasCcaas ? "Assigned" : "Not assigned"}
                         </span>
                       </div>
                       <div>
@@ -730,7 +742,7 @@ export default function ProductionReadinessChecker() {
                         <div className="mt-2 space-y-1">
                           {filtered[expandedRow].isGhost && (
                             <div className="rounded px-2 py-1" style={{ background: "#7f1d1d33", border: "1px solid #7f1d1d" }}>
-                              <span style={{ color: "#fca5a5" }}>In Nesting without credentials — may not be able to take calls</span>
+                              <span style={{ color: "#fca5a5" }}>In Nesting but not in Litmos — likely doesn't have credentials and shouldn't be in this status</span>
                             </div>
                           )}
                           {filtered[expandedRow].isStaleWaiter && (
