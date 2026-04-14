@@ -207,6 +207,7 @@ export default function ProductionReadinessChecker() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [expandedRow, setExpandedRow] = useState(null);
+  const [showEmail, setShowEmail] = useState(false);
   const [activeTab, setActiveTab] = useState("dashboard");
 
   const readFiles = async (files) => {
@@ -472,6 +473,72 @@ export default function ProductionReadinessChecker() {
     link.click();
   };
 
+  const emailBody = useMemo(() => {
+    if (!stats || !results) return "";
+    const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    const readyNames = results.filter(a => a.readyStatus === "ready").map(a => a.name);
+    const waitingNames = results.filter(a => a.isWaitingForCreds).map(a => a.name);
+    const ghostNames = results.filter(a => a.isGhost).map(a => a.name);
+    const staleNames = results.filter(a => a.isStaleWaiter).map(a => a.name);
+
+    let body = `Hi Jayden,\n\nHere is the NationsBenefits pipeline readiness summary as of ${today}.\n`;
+    body += `\nPIPELINE OVERVIEW\n`;
+    body += `• Total agents in pipeline: ${stats.total}\n`;
+    body += `• Production ready (all 3 pillars): ${stats.ready}\n`;
+    body += `• Litmos 14/14 complete: ${stats.litmosDone}\n`;
+    body += `• ShyftOff certification 100%: ${stats.shyftoffDone}\n`;
+
+    if (readyNames.length > 0) {
+      body += `\nREADY FOR PRODUCTION (${readyNames.length})\n`;
+      readyNames.forEach(n => { body += `• ${n}\n`; });
+    }
+
+    if (stats.waitingForCreds > 0 || stats.ghosts > 0 || stats.accountIssues > 0) {
+      body += `\nACTION ITEMS\n`;
+    }
+    if (stats.waitingForCreds > 0) {
+      body += `\nWaiting for Credentials (${stats.waitingForCreds}):\n`;
+      body += `NB Cert 100% + BG cleared but not yet in Litmos — should be added to credentials list.\n`;
+      waitingNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
+      if (waitingNames.length > 10) body += `• ...and ${waitingNames.length - 10} more\n`;
+    }
+    if (staleNames.length > 0) {
+      body += `\nStale — Waiting 3+ Weeks (${staleNames.length}):\n`;
+      body += `These agents likely have account issues that need manual investigation.\n`;
+      staleNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
+      if (staleNames.length > 10) body += `• ...and ${staleNames.length - 10} more\n`;
+    }
+    if (stats.ghosts > 0) {
+      body += `\nNesting Without Credentials (${stats.ghosts}):\n`;
+      body += `In Nesting status but not in Litmos — may need to be credentialed or moved back.\n`;
+      ghostNames.forEach(n => { body += `• ${n}\n`; });
+    }
+    if (stats.accountIssues > 0) {
+      body += `\nBackground Check Issues: ${stats.accountIssues} agents with BG check not cleared.\n`;
+    }
+
+    body += `\nPlease let me know if you need the full detailed export or have any questions.\n`;
+    body += `\nBest,\nDavid`;
+    return body;
+  }, [stats, results]);
+
+  const emailSubject = useMemo(() => {
+    if (!stats) return "";
+    const today = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit" });
+    return `NB Pipeline Update ${today} — ${stats.ready} Production Ready, ${stats.waitingForCreds} Awaiting Credentials`;
+  }, [stats]);
+
+  const handleCopyEmail = () => {
+    navigator.clipboard.writeText(emailBody);
+  };
+
+  const handleOpenMail = () => {
+    const to = "jaydencole@shyftoff.com";
+    const cc = "davidmorales@shyftoff.com,ericyost@shyftoff.com";
+    const mailto = `mailto:${to}?cc=${encodeURIComponent(cc)}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+    window.open(mailto);
+  };
+
   const hasData = results !== null;
 
   return (
@@ -518,9 +585,14 @@ export default function ProductionReadinessChecker() {
             {processing ? "Processing..." : "Analyze Readiness"}
           </button>
           {hasData && (
-            <button onClick={handleExport} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:bg-slate-800" style={{ borderColor: "#334155", color: "#94a3b8" }}>
-              Export CSV
-            </button>
+            <>
+              <button onClick={handleExport} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:bg-slate-800" style={{ borderColor: "#334155", color: "#94a3b8" }}>
+                Export CSV
+              </button>
+              <button onClick={() => setShowEmail(true)} className="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:brightness-110" style={{ background: "#7c3aed", color: "#fff" }}>
+                Generate Email
+              </button>
+            </>
           )}
         </div>
 
@@ -812,6 +884,36 @@ export default function ProductionReadinessChecker() {
           </div>
         )}
       </div>
+
+      {showEmail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }} onClick={() => setShowEmail(false)}>
+          <div className="w-full max-w-2xl mx-4 rounded-xl overflow-hidden" style={{ background: "#0f172a", border: "1px solid #1e293b" }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: "1px solid #1e293b" }}>
+              <div className="font-bold text-sm">Pipeline Update Email</div>
+              <button onClick={() => setShowEmail(false)} className="text-lg" style={{ color: "#64748b" }}>&times;</button>
+            </div>
+            <div className="px-5 py-3 space-y-2 text-xs" style={{ borderBottom: "1px solid #1e293b" }}>
+              <div><span style={{ color: "#64748b" }}>To: </span><span style={{ color: "#e2e8f0" }}>jaydencole@shyftoff.com</span></div>
+              <div><span style={{ color: "#64748b" }}>CC: </span><span style={{ color: "#e2e8f0" }}>davidmorales@shyftoff.com, ericyost@shyftoff.com</span></div>
+              <div><span style={{ color: "#64748b" }}>Subject: </span><span style={{ color: "#e2e8f0" }}>{emailSubject}</span></div>
+            </div>
+            <div className="px-5 py-4 overflow-y-auto" style={{ maxHeight: "50vh" }}>
+              <pre className="text-xs whitespace-pre-wrap leading-relaxed" style={{ color: "#cbd5e1", fontFamily: "'IBM Plex Sans', sans-serif" }}>{emailBody}</pre>
+            </div>
+            <div className="flex gap-2 px-5 py-3" style={{ borderTop: "1px solid #1e293b" }}>
+              <button onClick={handleCopyEmail} className="px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#1e293b", color: "#e2e8f0" }}>
+                Copy to Clipboard
+              </button>
+              <button onClick={handleOpenMail} className="px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#7c3aed", color: "#fff" }}>
+                Open in Mail Client
+              </button>
+              <button onClick={() => setShowEmail(false)} className="ml-auto px-4 py-2 rounded-lg text-xs font-semibold transition-all" style={{ color: "#64748b" }}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
