@@ -321,12 +321,32 @@ export default function ProductionReadinessChecker() {
       }));
       const litmosCount = litmosDone.filter(c => c.completed).length;
 
-      // ShyftOff certification progress (integer 0-100 from dashboard, or computed from JSON)
       const cert = parseCertProgress(row.certification_progress || "");
       const shyftoffPct = cert.pct;
       const shyftoffComplete = shyftoffPct === 100;
 
       const navAttended = navKeys.has(key) || (ldata?.email && navKeys.has(ldata.email.toLowerCase()));
+
+      // New fields for anomaly detection
+      const hasCreds = !!(row.ccaas_id || "").trim();
+      const bgStatus = (row.background_check_status || "").trim().toLowerCase();
+      const bgCleared = bgStatus === "cleared";
+      const createdAt = row.created_at ? new Date(row.created_at) : null;
+      const lastChanged = row.last_changed || row.status_updated_at || "";
+      const changedAt = lastChanged ? new Date(lastChanged) : null;
+      const isNesting = status.toLowerCase().includes("nesting");
+      const isRoster = status.toLowerCase().includes("roster");
+
+      // Days since status last changed
+      const now = new Date();
+      const daysSinceChange = changedAt ? Math.floor((now - changedAt) / 86400000) : null;
+      const daysSinceCreated = createdAt ? Math.floor((now - createdAt) / 86400000) : null;
+
+      // Anomaly flags
+      const isGhost = isNesting && !hasCreds;
+      const isWaitingForCreds = isRoster && bgCleared && shyftoffComplete && !hasCreds;
+      const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
+      const hasAccountIssue = !bgCleared && bgStatus !== "";
 
       const allLitmos = litmosCount === 14;
       const navMet = navAttended || !(navData && navData.length > 0);
@@ -340,6 +360,10 @@ export default function ProductionReadinessChecker() {
         shyftoffPct, shyftoffComplete,
         navAttended, navAvailable: navData && navData.length > 0,
         readyStatus, allLitmos,
+        hasCreds, bgStatus, bgCleared,
+        daysSinceChange, daysSinceCreated,
+        isNesting, isRoster,
+        isGhost, isWaitingForCreds, isStaleWaiter, hasAccountIssue,
       });
     });
 
@@ -354,6 +378,10 @@ export default function ProductionReadinessChecker() {
     if (filter === "missing") out = out.filter(a => a.readyStatus === "missing");
     if (filter === "litmos_done") out = out.filter(a => a.allLitmos);
     if (filter === "shyftoff_done") out = out.filter(a => a.shyftoffComplete);
+    if (filter === "ghosts") out = out.filter(a => a.isGhost);
+    if (filter === "waiting_creds") out = out.filter(a => a.isWaitingForCreds);
+    if (filter === "stale") out = out.filter(a => a.isStaleWaiter);
+    if (filter === "account_issues") out = out.filter(a => a.hasAccountIssue);
     if (search) {
       const s = search.toLowerCase();
       out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s) || a.nbEmail.toLowerCase().includes(s));
@@ -370,19 +398,34 @@ export default function ProductionReadinessChecker() {
       shyftoffDone: results.filter(a => a.shyftoffComplete).length,
       navAttended: results.filter(a => a.navAttended).length,
       navAvailable: results.length > 0 && results[0].navAvailable,
+      ghosts: results.filter(a => a.isGhost).length,
+      waitingForCreds: results.filter(a => a.isWaitingForCreds).length,
+      staleWaiters: results.filter(a => a.isStaleWaiter).length,
+      accountIssues: results.filter(a => a.hasAccountIssue).length,
     };
   }, [results]);
 
   const handleExport = () => {
     if (!filtered.length) return;
-    const headers = ["Agent Name","ShyftOff ID","CIP Status","NB Email","Litmos (done/14)","ShyftOff Cert %","Nav Meeting","Readiness"];
-    const rows = filtered.map(a => [
-      a.name, a.sid, a.status, a.nbEmail,
-      `${a.litmosCount}/14`,
-      a.shyftoffPct !== null ? `${a.shyftoffPct}%` : "N/A",
-      a.navAvailable ? (a.navAttended ? "YES" : "NO") : "N/A",
-      a.readyStatus.toUpperCase()
-    ]);
+    const headers = ["Agent Name","ShyftOff ID","CIP Status","NB Email","Litmos (done/14)","ShyftOff Cert %","Nav Meeting","Readiness","Has Credentials","BG Check","Days Since Change","Flags"];
+    const rows = filtered.map(a => {
+      const flags = [];
+      if (a.isGhost) flags.push("GHOST");
+      if (a.isWaitingForCreds) flags.push("WAITING_CREDS");
+      if (a.isStaleWaiter) flags.push("STALE");
+      if (a.hasAccountIssue) flags.push("BG_ISSUE");
+      return [
+        a.name, a.sid, a.status, a.nbEmail,
+        `${a.litmosCount}/14`,
+        a.shyftoffPct !== null ? `${a.shyftoffPct}%` : "N/A",
+        a.navAvailable ? (a.navAttended ? "YES" : "NO") : "N/A",
+        a.readyStatus.toUpperCase(),
+        a.hasCreds ? "YES" : "NO",
+        a.bgStatus || "unknown",
+        a.daysSinceChange !== null ? `${a.daysSinceChange}` : "N/A",
+        flags.join("; ") || "",
+      ];
+    });
     const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -409,11 +452,11 @@ export default function ProductionReadinessChecker() {
           </div>
           {hasData && (
             <div className="flex gap-1">
-              {["dashboard","details"].map(tab => (
-                <button key={tab} onClick={() => setActiveTab(tab)}
+              {[{k:"dashboard",l:"Dashboard"},{k:"insights",l:"Pipeline Insights"},{k:"details",l:"Detail View"}].map(tab => (
+                <button key={tab.k} onClick={() => setActiveTab(tab.k)}
                   className="px-3 py-1.5 rounded-md text-xs font-semibold transition-all"
-                  style={{ background: activeTab === tab ? "#0ea5e9" : "transparent", color: activeTab === tab ? "#020617" : "#94a3b8" }}>
-                  {tab === "dashboard" ? "Dashboard" : "Detail View"}
+                  style={{ background: activeTab === tab.k ? "#0ea5e9" : "transparent", color: activeTab === tab.k ? "#020617" : "#94a3b8" }}>
+                  {tab.l}
                 </button>
               ))}
             </div>
@@ -453,6 +496,57 @@ export default function ProductionReadinessChecker() {
               <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#f59e0b" : "#475569"} />
             </div>
 
+            {activeTab === "insights" && (
+              <div className="grid grid-cols-2 gap-3 mb-5">
+                <div className="rounded-xl p-4" style={{ background: "#0f172a", border: "1px solid #1e293b" }}>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#64748b" }}>Status Anomalies</div>
+                  <div className="space-y-3">
+                    <button onClick={() => { setFilter("ghosts"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#7f1d1d22", border: "1px solid #7f1d1d" }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold" style={{ color: "#f87171" }}>Nesting Without Credentials</span>
+                        <span className="text-2xl font-black" style={{ color: "#f87171" }}>{stats.ghosts}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#94a3b8" }}>
+                        Agents in "Nesting" status but missing a CCAAS ID. They may not actually have credentials to take calls.
+                      </div>
+                    </button>
+                    <button onClick={() => { setFilter("account_issues"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#78350f22", border: "1px solid #78350f" }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold" style={{ color: "#fbbf24" }}>Account Issues</span>
+                        <span className="text-2xl font-black" style={{ color: "#fbbf24" }}>{stats.accountIssues}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#94a3b8" }}>
+                        Background check not cleared (status: pending or created). These agents are blocked from progressing.
+                      </div>
+                    </button>
+                  </div>
+                </div>
+                <div className="rounded-xl p-4" style={{ background: "#0f172a", border: "1px solid #1e293b" }}>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#64748b" }}>Credential Queue</div>
+                  <div className="space-y-3">
+                    <button onClick={() => { setFilter("waiting_creds"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#0ea5e922", border: "1px solid #0c4a6e" }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold" style={{ color: "#38bdf8" }}>Waiting for Credentials</span>
+                        <span className="text-2xl font-black" style={{ color: "#38bdf8" }}>{stats.waitingForCreds}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#94a3b8" }}>
+                        In Roster, BG cleared, ShyftOff cert 100% — nothing wrong, just need credentials issued.
+                      </div>
+                    </button>
+                    <button onClick={() => { setFilter("stale"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#7f1d1d22", border: "1px solid #7f1d1d" }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold" style={{ color: "#fb923c" }}>Stale (3+ Weeks)</span>
+                        <span className="text-2xl font-black" style={{ color: "#fb923c" }}>{stats.staleWaiters}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#94a3b8" }}>
+                        Waiting 3+ weeks for credentials — likely has an account issue that needs manual investigation.
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center gap-3 mb-3">
               <input type="text" placeholder="Search by name, ID, or email..."
                 value={search} onChange={e => setSearch(e.target.value)}
@@ -466,6 +560,9 @@ export default function ProductionReadinessChecker() {
                   { key: "shyftoff_done", label: "ShyftOff ✓" },
                   { key: "partial", label: "In Progress" },
                   { key: "missing", label: "Not Started" },
+                  { key: "ghosts", label: "Ghosts" },
+                  { key: "waiting_creds", label: "Waiting Creds" },
+                  { key: "account_issues", label: "BG Issues" },
                 ].map(f => (
                   <button key={f.key} onClick={() => setFilter(f.key)}
                     className="px-3 py-1.5 rounded-md text-xs font-semibold transition-all"
@@ -505,6 +602,12 @@ export default function ProductionReadinessChecker() {
                         <td className="px-3 py-2.5">
                           <div className="font-semibold">{a.name}</div>
                           <div className="text-xs" style={{ color: "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>{a.sid}</div>
+                          <div className="flex gap-1 mt-0.5 flex-wrap">
+                            {a.isGhost && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#7f1d1d", color: "#fca5a5", fontSize: 10 }}>NO CREDS</span>}
+                            {a.hasAccountIssue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#78350f", color: "#fcd34d", fontSize: 10 }}>BG: {a.bgStatus}</span>}
+                            {a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#7c2d12", color: "#fdba74", fontSize: 10 }}>STALE {a.daysSinceChange}d</span>}
+                            {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#0c4a6e", color: "#7dd3fc", fontSize: 10 }}>AWAITING CREDS</span>}
+                          </div>
                         </td>
                         <td className="px-3 py-2.5 text-xs" style={{ color: "#94a3b8" }}>{a.status}</td>
                         <td className="px-3 py-2.5 text-center">
@@ -598,6 +701,50 @@ export default function ProductionReadinessChecker() {
                     </div>
                     <div className="text-xs" style={{ color: filtered[expandedRow].navAttended ? "#4ade80" : "#f87171" }}>
                       {!filtered[expandedRow].navAvailable ? "No nav meeting data uploaded" : filtered[expandedRow].navAttended ? "✓ Attended" : "✗ Not found in attendance list"}
+                    </div>
+                    <div className="mt-3 text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#64748b" }}>
+                      Pipeline Status
+                    </div>
+                    <div className="space-y-1 text-xs">
+                      <div>
+                        <span style={{ color: "#64748b" }}>Credentials (CCAAS): </span>
+                        <span style={{ color: filtered[expandedRow].hasCreds ? "#4ade80" : "#f87171" }}>
+                          {filtered[expandedRow].hasCreds ? "Assigned" : "Not assigned"}
+                        </span>
+                      </div>
+                      <div>
+                        <span style={{ color: "#64748b" }}>Background Check: </span>
+                        <span style={{ color: filtered[expandedRow].bgCleared ? "#4ade80" : "#fbbf24" }}>
+                          {filtered[expandedRow].bgStatus || "unknown"}
+                        </span>
+                      </div>
+                      {filtered[expandedRow].daysSinceChange !== null && (
+                        <div>
+                          <span style={{ color: "#64748b" }}>Days since last status change: </span>
+                          <span style={{ color: filtered[expandedRow].daysSinceChange >= 21 ? "#fb923c" : "#94a3b8" }}>
+                            {filtered[expandedRow].daysSinceChange}d
+                          </span>
+                        </div>
+                      )}
+                      {(filtered[expandedRow].isGhost || filtered[expandedRow].isWaitingForCreds || filtered[expandedRow].hasAccountIssue) && (
+                        <div className="mt-2 space-y-1">
+                          {filtered[expandedRow].isGhost && (
+                            <div className="rounded px-2 py-1" style={{ background: "#7f1d1d33", border: "1px solid #7f1d1d" }}>
+                              <span style={{ color: "#fca5a5" }}>In Nesting without credentials — may not be able to take calls</span>
+                            </div>
+                          )}
+                          {filtered[expandedRow].isStaleWaiter && (
+                            <div className="rounded px-2 py-1" style={{ background: "#7c2d1233", border: "1px solid #7c2d12" }}>
+                              <span style={{ color: "#fdba74" }}>Waiting {filtered[expandedRow].daysSinceChange}+ days for credentials — likely account issue</span>
+                            </div>
+                          )}
+                          {filtered[expandedRow].hasAccountIssue && (
+                            <div className="rounded px-2 py-1" style={{ background: "#78350f33", border: "1px solid #78350f" }}>
+                              <span style={{ color: "#fcd34d" }}>Background check status: {filtered[expandedRow].bgStatus} — blocking progress</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
