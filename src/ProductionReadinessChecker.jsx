@@ -197,10 +197,12 @@ export default function ProductionReadinessChecker() {
   const [cipFiles, setCipFiles] = useState([]);
   const [prodFiles, setProdFiles] = useState([]);
   const [navFiles, setNavFiles] = useState([]);
+  const [peopleFiles, setPeopleFiles] = useState([]);
   const [litmosData, setLitmosData] = useState(null);
   const [cipData, setCipData] = useState(null);
   const [prodData, setProdData] = useState(null);
   const [navData, setNavData] = useState(null);
+  const [peopleData, setPeopleData] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -219,19 +221,21 @@ export default function ProductionReadinessChecker() {
   const handleProcess = useCallback(async () => {
     setProcessing(true);
     try {
-      const [litRows, cipRows, prodRows, navRows] = await Promise.all([
+      const [litRows, cipRows, prodRows, navRows, pplRows] = await Promise.all([
         litmosFiles.length ? readFiles(litmosFiles) : Promise.resolve([]),
         cipFiles.length ? readFiles(cipFiles) : Promise.resolve([]),
         prodFiles.length ? readFiles(prodFiles) : Promise.resolve([]),
         navFiles.length ? readFiles(navFiles) : Promise.resolve([]),
+        peopleFiles.length ? readFiles(peopleFiles) : Promise.resolve([]),
       ]);
       setLitmosData(litRows);
       setCipData(cipRows);
       setProdData(prodRows);
       setNavData(navRows);
+      setPeopleData(pplRows);
     } catch (e) { console.error(e); }
     setProcessing(false);
-  }, [litmosFiles, cipFiles, prodFiles, navFiles]);
+  }, [litmosFiles, cipFiles, prodFiles, navFiles, peopleFiles]);
 
   const results = useMemo(() => {
     if (!litmosData || !cipData) return null;
@@ -250,6 +254,19 @@ export default function ProductionReadinessChecker() {
       }
     });
 
+    // People Report: who has a Litmos account (= has credentials)
+    const litmosPeopleEmails = new Set();
+    const litmosPeopleNames = new Set();
+    (peopleData || []).forEach(r => {
+      const email = (r["People.Username"] || "").toLowerCase().trim();
+      if (email) litmosPeopleEmails.add(email);
+      const first = r["People.First Name"] || "";
+      const last = r["People.Last Name"] || "";
+      if (first || last) litmosPeopleNames.add(nameKey(first, last));
+    });
+    const hasPeopleReport = litmosPeopleEmails.size > 0;
+
+    // Course Data: per-course completion for the 14 required Litmos courses
     const litmosMap = {};
     const litmosEmailMap = {};
     litmosData.forEach(r => {
@@ -307,6 +324,7 @@ export default function ProductionReadinessChecker() {
       const status = (row.status || "").trim();
       const { first, last } = nameParts(name);
       const key = nameKey(first, last);
+      const parts = name.split(/\s+/).filter(Boolean);
 
       // Exclude production agents (by name key or ShyftOff ID)
       if (prodKeys.has(key) || prodSids.has(sid.toUpperCase())) return;
@@ -329,7 +347,20 @@ export default function ProductionReadinessChecker() {
 
       // New fields for anomaly detection
       const hasCcaas = !!(row.ccaas_id || "").trim();
-      const inLitmos = ldata !== null;
+      // Check if agent has a Litmos account (= has credentials)
+      // Use People Report if available (definitive), otherwise fall back to Course Data presence
+      let inLitmos;
+      if (hasPeopleReport) {
+        const candidateEm = candidateEmails(name);
+        inLitmos = litmosPeopleNames.has(key) || candidateEm.some(e => litmosPeopleEmails.has(e));
+        // Also try multi-part name keys
+        if (!inLitmos && parts.length > 2) {
+          inLitmos = litmosPeopleNames.has(nameKey(parts.slice(0, -1).join(""), last))
+            || litmosPeopleNames.has(nameKey(first, parts.slice(1).join("")));
+        }
+      } else {
+        inLitmos = ldata !== null;
+      }
       const bgStatus = (row.background_check_status || "").trim().toLowerCase();
       const bgCleared = bgStatus === "cleared";
       const createdAt = row.created_at ? new Date(row.created_at) : null;
@@ -373,7 +404,7 @@ export default function ProductionReadinessChecker() {
     });
 
     return agents;
-  }, [litmosData, cipData, prodData, navData]);
+  }, [litmosData, cipData, prodData, navData, peopleData]);
 
   const filtered = useMemo(() => {
     if (!results) return [];
@@ -471,8 +502,9 @@ export default function ProductionReadinessChecker() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-4">
-        <div className="grid grid-cols-4 gap-3 mb-4">
-          <FileUpload label="Litmos Course Data" sublabel="Required — CSV export with all 14 courses" onFiles={f => setLitmosFiles(f)} multiple files={litmosFiles} />
+        <div className="grid grid-cols-5 gap-3 mb-4">
+          <FileUpload label="Litmos Course Data" sublabel="Required — CSV with course completions" onFiles={f => setLitmosFiles(f)} multiple files={litmosFiles} />
+          <FileUpload label="Litmos People Report" sublabel="Required — Who has a Litmos account" onFiles={f => setPeopleFiles(f)} multiple={false} files={peopleFiles} />
           <FileUpload label="Nesting / CIP Export" sublabel="Required — Dashboard or CIP agent export" onFiles={f => setCipFiles(f)} multiple files={cipFiles} />
           <FileUpload label="Production Exports" sublabel="Optional — Exclude current prod agents" onFiles={f => setProdFiles(f)} multiple files={prodFiles} />
           <FileUpload label="Nav Meeting Tracker" sublabel="Optional — CSV with Name/Email columns" onFiles={f => setNavFiles(f)} multiple={false} files={navFiles} />
