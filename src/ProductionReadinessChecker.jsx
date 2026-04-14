@@ -80,7 +80,7 @@ function parseCSV(text) {
 }
 
 function normalize(s) {
-  return (s || "").toLowerCase().replace(/[.''\-\s]+/g, "").trim();
+  return (s || "").toLowerCase().replace(/[.'''`\u2018\u2019\u201B\-\s]+/g, "").trim();
 }
 
 function nameKey(first, last) {
@@ -93,7 +93,7 @@ function nameParts(fullName) {
 }
 
 function candidateEmails(fullName) {
-  const parts = (fullName || "").trim().replace(/['']/g, "").split(/\s+/).filter(Boolean);
+  const parts = (fullName || "").trim().replace(/['''`\u2018\u2019\u201B]/g, "").split(/\s+/).filter(Boolean);
   if (parts.length < 2) return [];
   const domain = "nationsbenefits.com";
   const emails = new Set();
