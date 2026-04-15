@@ -836,27 +836,57 @@ export default function ProductionReadinessChecker() {
               </div>
             </div>
 
-            {expandedRow !== null && filtered[expandedRow] && (() => {
-              const ag = filtered[expandedRow];
-              return (
-              <div className="mt-3 rounded-xl overflow-hidden" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                {/* Header bar with name + copy + credential call-out */}
+            <div className="mt-3 text-xs text-center" style={{ color: "#4D1F3B" }}>
+              Showing {filtered.length} of {results.length} agents • Click any row for details
+            </div>
+          </>
+        )}
+
+        {!hasData && (
+          <div className="text-center py-16">
+            <div className="text-5xl mb-3">📋</div>
+            <div className="text-lg font-bold mb-1" style={{ color: "#b8a5d4" }}>Upload your data to get started</div>
+            <div className="text-sm" style={{ color: "#5c3d7a" }}>
+              Drop in your Litmos export and CIP files, then hit Analyze.<br />
+              Optionally add production exports to exclude and nav meeting data.
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Side panel for agent detail */}
+      {expandedRow !== null && filtered[expandedRow] && (() => {
+        const ag = filtered[expandedRow];
+        return (
+          <>
+            {/* Backdrop */}
+            <div className="fixed inset-0 z-40" style={{ background: "rgba(0,0,0,0.3)" }} onClick={() => setExpandedRow(null)} />
+            {/* Panel */}
+            <div className="fixed top-0 right-0 z-50 h-full overflow-y-auto" style={{ width: 420, background: "#1a0d2e", borderLeft: "1px solid #3d2057", boxShadow: "-4px 0 24px rgba(0,0,0,0.5)" }}>
+              {/* Header */}
+              <div className="sticky top-0 z-10" style={{ background: "#1a0d2e" }}>
                 <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
-                  <div className="flex items-center gap-3">
-                    <div className="font-bold">{ag.name}</div>
-                    {ag.sid && <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#3d2057", color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>{ag.sid}</span>}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="font-bold truncate">{ag.name}</div>
                     <button
                       onClick={() => handleCopyAgent(ag, "detail", { stopPropagation: () => {} })}
-                      className="px-2 py-0.5 rounded text-xs transition-all hover:brightness-110"
+                      className="flex-shrink-0 px-2 py-0.5 rounded text-xs transition-all hover:brightness-110"
                       style={{ background: copiedIdx === "detail" ? "#1a4d2e" : "#3d2057", color: copiedIdx === "detail" ? "#4ade80" : "#b8a5d4" }}>
-                      {copiedIdx === "detail" ? "✓ Copied" : "📋 Copy"}
+                      {copiedIdx === "detail" ? "✓" : "📋"}
                     </button>
                   </div>
-                  <Badge type={ag.readyStatus} />
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <Badge type={ag.readyStatus} />
+                    <button onClick={() => setExpandedRow(null)} className="text-lg leading-none px-1" style={{ color: "#7a5f9a" }}>&times;</button>
+                  </div>
                 </div>
-
+                {ag.sid && (
+                  <div className="px-4 py-1" style={{ borderBottom: "1px solid #3d2057" }}>
+                    <span className="text-xs" style={{ color: "#7a5f9a", fontFamily: "'IBM Plex Mono', monospace" }}>{ag.sid}</span>
+                  </div>
+                )}
                 {/* Credential call-out banner */}
-                <div className="px-4 py-2.5 flex items-center gap-2" style={{
+                <div className="px-4 py-2.5" style={{
                   background: ag.rosterCoursesDone && ag.bgCleared && !ag.inLitmos ? "#794EC233"
                     : ag.hasAccountIssue ? "#4D1F3B33"
                     : "#27133A",
@@ -873,201 +903,175 @@ export default function ProductionReadinessChecker() {
                     {ag.credentialNote}
                   </span>
                 </div>
+              </div>
 
-                {/* ShyftOff Courses — two phases */}
-                <div className="px-4 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
-                  <div className="grid grid-cols-2 gap-4">
-                    {/* Phase 1: Roster courses */}
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2" style={{ color: "#7a5f9a" }}>
-                        <span>Phase 1 — Roster</span>
-                        {ag.rosterCoursesDone && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#1a4d2e", color: "#4ade80", fontSize: 10 }}>COMPLETE</span>}
-                      </div>
-                      {ROSTER_COURSES.map((course, i) => {
-                        const pct = ag.courseMap[course] || 0;
-                        const done = pct >= 100;
-                        return (
-                          <div key={i} className="flex items-center gap-2 mb-1.5">
-                            <div className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
-                              style={{ background: done ? "#1a4d2e" : "#3d2057", color: done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
-                              {done ? "✓" : pct > 0 ? "◔" : "○"}
-                            </div>
-                            <div className="flex-1">
-                              <div className="text-xs font-semibold" style={{ color: done ? "#E8DFF6" : "#b8a5d4" }}>{course}</div>
-                              <div className="text-xs" style={{ color: done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
-                                {done ? "Complete" : pct > 0 ? `${pct}% in progress` : "Not started"}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {/* Phase 2: Nesting courses (requires credentials) */}
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2" style={{ color: "#7a5f9a" }}>
-                        <span>Phase 2 — Nesting</span>
-                        {!ag.inLitmos && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#7a5f9a", fontSize: 10 }}>LOCKED</span>}
-                        {ag.inLitmos && ag.nestingCoursesDone && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#1a4d2e", color: "#4ade80", fontSize: 10 }}>COMPLETE</span>}
-                      </div>
-                      {NESTING_COURSES.map((course, i) => {
-                        const pct = ag.courseMap[course] || 0;
-                        const done = pct >= 100;
-                        const locked = !ag.inLitmos;
-                        return (
-                          <div key={i} className="flex items-center gap-2 mb-1.5" style={{ opacity: locked ? 0.5 : 1 }}>
-                            <div className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
-                              style={{ background: done ? "#1a4d2e" : "#3d2057", color: done ? "#4ade80" : locked ? "#5c3d7a" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
-                              {locked ? "🔒" : done ? "✓" : pct > 0 ? "◔" : "○"}
-                            </div>
-                            <div className="flex-1">
-                              <div className="text-xs font-semibold" style={{ color: done ? "#E8DFF6" : "#b8a5d4" }}>{course}</div>
-                              <div className="text-xs" style={{ color: locked ? "#5c3d7a" : done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
-                                {locked ? "Requires credentials" : done ? "Complete" : pct > 0 ? `${pct}% in progress` : "Not started"}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+              {/* Quick status row — BG, Credentials, Last Change */}
+              <div className="grid grid-cols-3 gap-0" style={{ borderBottom: "1px solid #3d2057" }}>
+                <div className="px-3 py-2.5 text-center" style={{ borderRight: "1px solid #3d2057" }}>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a", fontSize: 10 }}>BG Check</div>
+                  <div className="text-base font-black" style={{ color: ag.bgCleared ? "#4ade80" : ag.bgStatus ? "#FFE566" : "#7a5f9a" }}>
+                    {ag.bgCleared ? "✓" : ag.bgStatus ? "⏳" : "—"}
+                  </div>
+                  <div className="text-xs" style={{ color: ag.bgCleared ? "#4ade80" : "#FFE566", fontSize: 10 }}>
+                    {ag.bgStatus || "unknown"}
                   </div>
                 </div>
-
-                {/* Quick status row — BG, Credentials, Last Change */}
-                <div className="grid grid-cols-3 gap-0" style={{ borderBottom: "1px solid #3d2057" }}>
-                  <div className="px-4 py-3 text-center" style={{ borderRight: "1px solid #3d2057" }}>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>BG Check</div>
-                    <div className="text-lg font-black" style={{ color: ag.bgCleared ? "#4ade80" : ag.bgStatus ? "#FFE566" : "#7a5f9a" }}>
-                      {ag.bgCleared ? "✓" : ag.bgStatus ? "⏳" : "—"}
-                    </div>
-                    <div className="text-xs mt-0.5" style={{ color: ag.bgCleared ? "#4ade80" : "#FFE566" }}>
-                      {ag.bgStatus || "unknown"}
-                    </div>
+                <div className="px-3 py-2.5 text-center" style={{ borderRight: "1px solid #3d2057" }}>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a", fontSize: 10 }}>Credentials</div>
+                  <div className="text-base font-black" style={{ color: ag.inLitmos ? "#4ade80" : "#FF7866" }}>
+                    {ag.inLitmos ? "✓" : "✗"}
                   </div>
-                  <div className="px-4 py-3 text-center" style={{ borderRight: "1px solid #3d2057" }}>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>Credentials</div>
-                    <div className="text-lg font-black" style={{ color: ag.inLitmos ? "#4ade80" : "#FF7866" }}>
-                      {ag.inLitmos ? "✓" : "✗"}
-                    </div>
-                    <div className="text-xs mt-0.5" style={{ color: ag.inLitmos ? "#4ade80" : "#FF7866" }}>
-                      {ag.inLitmos ? "In Litmos" : "Not credentialed"}
-                    </div>
-                  </div>
-                  <div className="px-4 py-3 text-center">
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>Last Change</div>
-                    <div className="text-lg font-black" style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      color: ag.daysSinceChange !== null && ag.daysSinceChange >= 21 ? "#FF7866" : "#E8DFF6",
-                      fontSize: ag.lastChangedRaw ? 14 : 18,
-                    }}>
-                      {ag.lastChangedRaw ? new Date(ag.lastChangedRaw).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
-                    </div>
-                    {ag.daysSinceChange !== null && (
-                      <div className="text-xs mt-0.5" style={{ color: ag.daysSinceChange >= 21 ? "#FF7866" : "#7a5f9a" }}>
-                        {ag.daysSinceChange}d ago{ag.daysSinceChange >= 21 ? " ⚠" : ""}
-                      </div>
-                    )}
+                  <div className="text-xs" style={{ color: ag.inLitmos ? "#4ade80" : "#FF7866", fontSize: 10 }}>
+                    {ag.inLitmos ? "In Litmos" : "No creds"}
                   </div>
                 </div>
-
-                {/* Detail grid: Litmos courses left, Pipeline info right */}
-                <div className="grid grid-cols-2 gap-0">
-                  <div className="px-4 py-3" style={{ borderRight: "1px solid #3d2057" }}>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
-                      Litmos Courses ({ag.litmosCount}/14)
-                    </div>
-                    <div className="space-y-1">
-                      {ag.litmosDone.map((c, i) => (
-                        <div key={i} className="flex items-center gap-2 text-xs">
-                          <div className="w-3.5 h-3.5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
-                            style={{ background: c.completed ? "#1a4d2e" : "#3d1525", color: c.completed ? "#4ade80" : "#FF7866" }}>
-                            {c.completed ? "✓" : "✗"}
-                          </div>
-                          <span style={{ color: c.completed ? "#b8a5d4" : "#FF7866" }}>{c.name}</span>
-                          {c.date && <span style={{ color: "#5c3d7a", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>{c.date.split(" ")[0]}</span>}
-                        </div>
-                      ))}
-                    </div>
+                <div className="px-3 py-2.5 text-center">
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a", fontSize: 10 }}>Last Change</div>
+                  <div className="text-sm font-black" style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    color: ag.daysSinceChange !== null && ag.daysSinceChange >= 21 ? "#FF7866" : "#E8DFF6",
+                  }}>
+                    {ag.lastChangedRaw ? new Date(ag.lastChangedRaw).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
                   </div>
-                  <div className="px-4 py-3">
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
-                      Pipeline Details
+                  {ag.daysSinceChange !== null && (
+                    <div className="text-xs" style={{ color: ag.daysSinceChange >= 21 ? "#FF7866" : "#7a5f9a", fontSize: 10 }}>
+                      {ag.daysSinceChange}d ago{ag.daysSinceChange >= 21 ? " ⚠" : ""}
                     </div>
-                    <div className="space-y-2 text-xs">
-                      <div className="flex justify-between">
-                        <span style={{ color: "#7a5f9a" }}>CIP Status</span>
-                        <span style={{ color: "#E8DFF6" }}>{ag.status}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span style={{ color: "#7a5f9a" }}>CCAAS ID</span>
-                        <span style={{ color: ag.hasCcaas ? "#4ade80" : "#FFE566" }}>{ag.hasCcaas ? "Assigned" : "Not assigned"}</span>
-                      </div>
-                      {ag.nbEmail && (
-                        <div className="flex justify-between">
-                          <span style={{ color: "#7a5f9a" }}>NB Email</span>
-                          <span style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>{ag.nbEmail}</span>
-                        </div>
-                      )}
-                      {ag.createdAtRaw && (
-                        <div className="flex justify-between">
-                          <span style={{ color: "#7a5f9a" }}>Created</span>
-                          <span style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>
-                            {new Date(ag.createdAtRaw).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                            {ag.daysSinceCreated !== null && <span style={{ color: "#5c3d7a" }}> ({ag.daysSinceCreated}d)</span>}
-                          </span>
-                        </div>
-                      )}
-                      <div className="flex justify-between">
-                        <span style={{ color: "#7a5f9a" }}>Nav Meeting</span>
-                        <span style={{ color: ag.navAttended ? "#4ade80" : !ag.navAvailable ? "#5c3d7a" : "#FF7866" }}>
-                          {!ag.navAvailable ? "No data" : ag.navAttended ? "✓ Attended" : "✗ Not attended"}
-                        </span>
-                      </div>
-                    </div>
+                  )}
+                </div>
+              </div>
 
-                    {/* Anomaly alerts */}
-                    {(ag.isGhost || ag.isStaleWaiter || ag.hasAccountIssue) && (
-                      <div className="mt-3 space-y-1.5">
-                        <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Alerts</div>
-                        {ag.isGhost && (
-                          <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#3d152533", border: "1px solid #4D1F3B", color: "#FF7866" }}>
-                            In Nesting without credentials — shouldn't be in this status
-                          </div>
-                        )}
-                        {ag.isStaleWaiter && (
-                          <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B", color: "#FF7866" }}>
-                            Waiting {ag.daysSinceChange}+ days for credentials — likely account issue
-                          </div>
-                        )}
-                        {ag.hasAccountIssue && (
-                          <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B", color: "#FFE566" }}>
-                            BG check: {ag.bgStatus} — blocking progress
-                          </div>
-                        )}
+              {/* ShyftOff Courses — two phases */}
+              <div className="px-4 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
+                <div className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2" style={{ color: "#7a5f9a" }}>
+                  <span>Phase 1 — Roster</span>
+                  {ag.rosterCoursesDone && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#1a4d2e", color: "#4ade80", fontSize: 10 }}>COMPLETE</span>}
+                </div>
+                {ROSTER_COURSES.map((course, i) => {
+                  const pct = ag.courseMap[course] || 0;
+                  const done = pct >= 100;
+                  return (
+                    <div key={i} className="flex items-center gap-2 mb-1.5">
+                      <div className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
+                        style={{ background: done ? "#1a4d2e" : "#3d2057", color: done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                        {done ? "✓" : pct > 0 ? "◔" : "○"}
                       </div>
-                    )}
+                      <div className="flex-1">
+                        <div className="text-xs font-semibold" style={{ color: done ? "#E8DFF6" : "#b8a5d4" }}>{course}</div>
+                        <div className="text-xs" style={{ color: done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                          {done ? "Complete" : pct > 0 ? `${pct}% in progress` : "Not started"}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <div className="text-xs font-semibold uppercase tracking-wider mb-2 mt-3 flex items-center gap-2" style={{ color: "#7a5f9a" }}>
+                  <span>Phase 2 — Nesting</span>
+                  {!ag.inLitmos && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#7a5f9a", fontSize: 10 }}>LOCKED</span>}
+                  {ag.inLitmos && ag.nestingCoursesDone && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#1a4d2e", color: "#4ade80", fontSize: 10 }}>COMPLETE</span>}
+                </div>
+                {NESTING_COURSES.map((course, i) => {
+                  const pct = ag.courseMap[course] || 0;
+                  const done = pct >= 100;
+                  const locked = !ag.inLitmos;
+                  return (
+                    <div key={i} className="flex items-center gap-2 mb-1.5" style={{ opacity: locked ? 0.5 : 1 }}>
+                      <div className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
+                        style={{ background: done ? "#1a4d2e" : "#3d2057", color: done ? "#4ade80" : locked ? "#5c3d7a" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                        {locked ? "🔒" : done ? "✓" : pct > 0 ? "◔" : "○"}
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-xs font-semibold" style={{ color: done ? "#E8DFF6" : "#b8a5d4" }}>{course}</div>
+                        <div className="text-xs" style={{ color: locked ? "#5c3d7a" : done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                          {locked ? "Requires credentials" : done ? "Complete" : pct > 0 ? `${pct}% in progress` : "Not started"}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Litmos Courses */}
+              <div className="px-4 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
+                <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
+                  Litmos Courses ({ag.litmosCount}/14)
+                </div>
+                <div className="space-y-1">
+                  {ag.litmosDone.map((c, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs">
+                      <div className="w-3.5 h-3.5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
+                        style={{ background: c.completed ? "#1a4d2e" : "#3d1525", color: c.completed ? "#4ade80" : "#FF7866" }}>
+                        {c.completed ? "✓" : "✗"}
+                      </div>
+                      <span className="flex-1" style={{ color: c.completed ? "#b8a5d4" : "#FF7866" }}>{c.name}</span>
+                      {c.date && <span style={{ color: "#5c3d7a", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>{c.date.split(" ")[0]}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Pipeline Details */}
+              <div className="px-4 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
+                <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>Pipeline Details</div>
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between">
+                    <span style={{ color: "#7a5f9a" }}>CIP Status</span>
+                    <span style={{ color: "#E8DFF6" }}>{ag.status}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span style={{ color: "#7a5f9a" }}>CCAAS ID</span>
+                    <span style={{ color: ag.hasCcaas ? "#4ade80" : "#FFE566" }}>{ag.hasCcaas ? "Assigned" : "Not assigned"}</span>
+                  </div>
+                  {ag.nbEmail && (
+                    <div className="flex justify-between">
+                      <span style={{ color: "#7a5f9a" }}>NB Email</span>
+                      <span style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>{ag.nbEmail}</span>
+                    </div>
+                  )}
+                  {ag.createdAtRaw && (
+                    <div className="flex justify-between">
+                      <span style={{ color: "#7a5f9a" }}>Created</span>
+                      <span style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>
+                        {new Date(ag.createdAtRaw).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        {ag.daysSinceCreated !== null && <span style={{ color: "#5c3d7a" }}> ({ag.daysSinceCreated}d)</span>}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span style={{ color: "#7a5f9a" }}>Nav Meeting</span>
+                    <span style={{ color: ag.navAttended ? "#4ade80" : !ag.navAvailable ? "#5c3d7a" : "#FF7866" }}>
+                      {!ag.navAvailable ? "No data" : ag.navAttended ? "✓ Attended" : "✗ Not attended"}
+                    </span>
                   </div>
                 </div>
               </div>
-              );
-            })()}
 
-            <div className="mt-3 text-xs text-center" style={{ color: "#4D1F3B" }}>
-              Showing {filtered.length} of {results.length} agents • Click any row for full breakdown
+              {/* Anomaly alerts */}
+              {(ag.isGhost || ag.isStaleWaiter || ag.hasAccountIssue) && (
+                <div className="px-4 py-3 space-y-1.5">
+                  <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Alerts</div>
+                  {ag.isGhost && (
+                    <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#3d152533", border: "1px solid #4D1F3B", color: "#FF7866" }}>
+                      In Nesting without credentials — shouldn't be in this status
+                    </div>
+                  )}
+                  {ag.isStaleWaiter && (
+                    <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B", color: "#FF7866" }}>
+                      Waiting {ag.daysSinceChange}+ days for credentials — likely account issue
+                    </div>
+                  )}
+                  {ag.hasAccountIssue && (
+                    <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B", color: "#FFE566" }}>
+                      BG check: {ag.bgStatus} — blocking progress
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </>
-        )}
-
-        {!hasData && (
-          <div className="text-center py-16">
-            <div className="text-5xl mb-3">📋</div>
-            <div className="text-lg font-bold mb-1" style={{ color: "#b8a5d4" }}>Upload your data to get started</div>
-            <div className="text-sm" style={{ color: "#5c3d7a" }}>
-              Drop in your Litmos export and CIP files, then hit Analyze.<br />
-              Optionally add production exports to exclude and nav meeting data.
-            </div>
-          </div>
-        )}
-      </div>
+        );
+      })()}
 
       {showEmail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)" }} onClick={() => setShowEmail(false)}>
