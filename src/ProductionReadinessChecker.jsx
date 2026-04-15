@@ -213,25 +213,8 @@ export default function ProductionReadinessChecker() {
 
   const handleCopyAgent = (a, idx, e) => {
     e.stopPropagation();
-    const flags = [];
-    if (a.isGhost) flags.push("NOT IN LITMOS");
-    if (a.isWaitingForCreds) flags.push("AWAITING CREDS");
-    if (a.isStaleWaiter) flags.push("STALE " + a.daysSinceChange + "d");
-    if (a.hasAccountIssue) flags.push("BG: " + a.bgStatus);
-    const lines = [
-      a.name,
-      a.sid ? `SID: ${a.sid}` : "",
-      a.nbEmail ? `Email: ${a.nbEmail}` : "",
-      `Status: ${a.status}`,
-      `Litmos: ${a.litmosCount}/14`,
-      a.shyftoffPct !== null ? `ShyftOff: ${a.shyftoffPct}%` : "",
-      a.navAvailable ? `Nav Meeting: ${a.navAttended ? "Yes" : "No"}` : "",
-      `Readiness: ${a.readyStatus.toUpperCase()}`,
-      `Has Credentials: ${a.inLitmos ? "Yes" : "No"}`,
-      `BG Check: ${a.bgStatus || "unknown"}`,
-      flags.length ? `Flags: ${flags.join(", ")}` : "",
-    ].filter(Boolean);
-    navigator.clipboard.writeText(lines.join("\n"));
+    const text = `${a.name}${a.sid ? " — " + a.sid : ""}`;
+    navigator.clipboard.writeText(text);
     setCopiedIdx(idx);
     setTimeout(() => setCopiedIdx(null), 1500);
   };
