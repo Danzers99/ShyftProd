@@ -399,17 +399,28 @@ export default function ProductionReadinessChecker() {
       const readyStatus = allLitmos && shyftoffComplete && navMet ? "ready"
         : (litmosCount > 0 || (shyftoffPct !== null && shyftoffPct > 0)) ? "partial" : "missing";
 
+      // Determine credential eligibility reason
+      let credentialNote = "";
+      if (inLitmos) credentialNote = "Has credentials";
+      else if (shyftoffComplete && bgCleared) credentialNote = "Should be on next credentials batch";
+      else if (shyftoffComplete && !bgCleared) credentialNote = "Cert done — waiting on BG check";
+      else if (!shyftoffComplete && bgCleared) credentialNote = "BG cleared — certification in progress";
+      else credentialNote = "Not yet eligible";
+
       agents.push({
         name, sid, status, key,
         nbEmail: ldata?.email || "",
         litmosCount, litmosDone, litmosTotal: 14,
-        shyftoffPct, shyftoffComplete,
+        shyftoffPct, shyftoffComplete, certMap: cert.map,
         navAttended, navAvailable: navData && navData.length > 0,
         readyStatus, allLitmos,
         inLitmos, hasCcaas, missingCcaas, bgStatus, bgCleared,
         daysSinceChange, daysSinceCreated,
+        createdAtRaw: row.created_at || "",
+        lastChangedRaw: lastChanged,
         isNesting, isRoster,
         isGhost, isWaitingForCreds, isStaleWaiter, hasAccountIssue,
+        credentialNote,
       });
     });
 
@@ -774,24 +785,101 @@ export default function ProductionReadinessChecker() {
               </div>
             </div>
 
-            {expandedRow !== null && filtered[expandedRow] && (
-              <div className="mt-3 rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-bold">{filtered[expandedRow].name} — Detail Breakdown</div>
-                  <button
-                    onClick={() => handleCopyAgent(filtered[expandedRow], "detail", { stopPropagation: () => {} })}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:brightness-110"
-                    style={{ background: copiedIdx === "detail" ? "#1a4d2e" : "#3d2057", color: copiedIdx === "detail" ? "#4ade80" : "#b8a5d4" }}>
-                    {copiedIdx === "detail" ? "✓ Copied!" : "📋 Copy Agent Info"}
-                  </button>
+            {expandedRow !== null && filtered[expandedRow] && (() => {
+              const ag = filtered[expandedRow];
+              return (
+              <div className="mt-3 rounded-xl overflow-hidden" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
+                {/* Header bar with name + copy + credential call-out */}
+                <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
+                  <div className="flex items-center gap-3">
+                    <div className="font-bold">{ag.name}</div>
+                    {ag.sid && <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#3d2057", color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>{ag.sid}</span>}
+                    <button
+                      onClick={() => handleCopyAgent(ag, "detail", { stopPropagation: () => {} })}
+                      className="px-2 py-0.5 rounded text-xs transition-all hover:brightness-110"
+                      style={{ background: copiedIdx === "detail" ? "#1a4d2e" : "#3d2057", color: copiedIdx === "detail" ? "#4ade80" : "#b8a5d4" }}>
+                      {copiedIdx === "detail" ? "✓ Copied" : "📋 Copy"}
+                    </button>
+                  </div>
+                  <Badge type={ag.readyStatus} />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
+
+                {/* Credential call-out banner */}
+                <div className="px-4 py-2.5 flex items-center gap-2" style={{
+                  background: ag.shyftoffComplete && ag.bgCleared && !ag.inLitmos ? "#794EC233"
+                    : ag.hasAccountIssue ? "#4D1F3B33"
+                    : "#27133A",
+                  borderBottom: "1px solid #3d2057",
+                }}>
+                  <span className="text-sm" style={{
+                    color: ag.shyftoffComplete && ag.bgCleared && !ag.inLitmos ? "#FFE566"
+                      : ag.inLitmos ? "#4ade80"
+                      : ag.hasAccountIssue ? "#FF7866"
+                      : "#b8a5d4",
+                    fontWeight: 600,
+                  }}>
+                    {ag.shyftoffComplete && ag.bgCleared && !ag.inLitmos ? "⚡ " : ""}
+                    {ag.credentialNote}
+                  </span>
+                </div>
+
+                {/* Quick status row — the 4 things you need to know at a glance */}
+                <div className="grid grid-cols-4 gap-0" style={{ borderBottom: "1px solid #3d2057" }}>
+                  <div className="px-4 py-3 text-center" style={{ borderRight: "1px solid #3d2057" }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>NB Certification</div>
+                    <div className="text-lg font-black" style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      color: ag.shyftoffComplete ? "#4ade80" : ag.shyftoffPct > 0 ? "#FFE566" : "#FF7866"
+                    }}>
+                      {ag.shyftoffPct !== null ? `${ag.shyftoffPct}%` : "N/A"}
+                    </div>
+                    <div className="text-xs mt-0.5" style={{ color: ag.shyftoffComplete ? "#4ade80" : "#7a5f9a" }}>
+                      {ag.shyftoffComplete ? "✓ Complete" : "In Progress"}
+                    </div>
+                  </div>
+                  <div className="px-4 py-3 text-center" style={{ borderRight: "1px solid #3d2057" }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>BG Check</div>
+                    <div className="text-lg font-black" style={{ color: ag.bgCleared ? "#4ade80" : ag.bgStatus ? "#FFE566" : "#7a5f9a" }}>
+                      {ag.bgCleared ? "✓" : ag.bgStatus ? "⏳" : "—"}
+                    </div>
+                    <div className="text-xs mt-0.5" style={{ color: ag.bgCleared ? "#4ade80" : "#FFE566" }}>
+                      {ag.bgStatus || "unknown"}
+                    </div>
+                  </div>
+                  <div className="px-4 py-3 text-center" style={{ borderRight: "1px solid #3d2057" }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>Credentials</div>
+                    <div className="text-lg font-black" style={{ color: ag.inLitmos ? "#4ade80" : "#FF7866" }}>
+                      {ag.inLitmos ? "✓" : "✗"}
+                    </div>
+                    <div className="text-xs mt-0.5" style={{ color: ag.inLitmos ? "#4ade80" : "#FF7866" }}>
+                      {ag.inLitmos ? "In Litmos" : "Not credentialed"}
+                    </div>
+                  </div>
+                  <div className="px-4 py-3 text-center">
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>Last Change</div>
+                    <div className="text-lg font-black" style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      color: ag.daysSinceChange !== null && ag.daysSinceChange >= 21 ? "#FF7866" : "#E8DFF6",
+                      fontSize: ag.lastChangedRaw ? 14 : 18,
+                    }}>
+                      {ag.lastChangedRaw ? new Date(ag.lastChangedRaw).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
+                    </div>
+                    {ag.daysSinceChange !== null && (
+                      <div className="text-xs mt-0.5" style={{ color: ag.daysSinceChange >= 21 ? "#FF7866" : "#7a5f9a" }}>
+                        {ag.daysSinceChange}d ago{ag.daysSinceChange >= 21 ? " ⚠" : ""}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Detail grid: Litmos courses left, Pipeline info right */}
+                <div className="grid grid-cols-2 gap-0">
+                  <div className="px-4 py-3" style={{ borderRight: "1px solid #3d2057" }}>
                     <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
-                      Litmos Courses ({filtered[expandedRow].litmosCount}/14)
+                      Litmos Courses ({ag.litmosCount}/14)
                     </div>
                     <div className="space-y-1">
-                      {filtered[expandedRow].litmosDone.map((c, i) => (
+                      {ag.litmosDone.map((c, i) => (
                         <div key={i} className="flex items-center gap-2 text-xs">
                           <div className="w-3.5 h-3.5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
                             style={{ background: c.completed ? "#1a4d2e" : "#3d1525", color: c.completed ? "#4ade80" : "#FF7866" }}>
@@ -803,96 +891,86 @@ export default function ProductionReadinessChecker() {
                       ))}
                     </div>
                   </div>
-                  <div>
+                  <div className="px-4 py-3">
                     <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
-                      ShyftOff Certification
+                      Pipeline Details
                     </div>
-                    {filtered[expandedRow].shyftoffPct !== null ? (
-                      <div>
-                        <div className="flex items-center gap-3 mb-2">
-                          <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: "#3d2057" }}>
+                    <div className="space-y-2 text-xs">
+                      <div className="flex justify-between">
+                        <span style={{ color: "#7a5f9a" }}>CIP Status</span>
+                        <span style={{ color: "#E8DFF6" }}>{ag.status}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span style={{ color: "#7a5f9a" }}>CCAAS ID</span>
+                        <span style={{ color: ag.hasCcaas ? "#4ade80" : "#FFE566" }}>{ag.hasCcaas ? "Assigned" : "Not assigned"}</span>
+                      </div>
+                      {ag.nbEmail && (
+                        <div className="flex justify-between">
+                          <span style={{ color: "#7a5f9a" }}>NB Email</span>
+                          <span style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>{ag.nbEmail}</span>
+                        </div>
+                      )}
+                      {ag.createdAtRaw && (
+                        <div className="flex justify-between">
+                          <span style={{ color: "#7a5f9a" }}>Created</span>
+                          <span style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>
+                            {new Date(ag.createdAtRaw).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                            {ag.daysSinceCreated !== null && <span style={{ color: "#5c3d7a" }}> ({ag.daysSinceCreated}d)</span>}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <span style={{ color: "#7a5f9a" }}>Nav Meeting</span>
+                        <span style={{ color: ag.navAttended ? "#4ade80" : !ag.navAvailable ? "#5c3d7a" : "#FF7866" }}>
+                          {!ag.navAvailable ? "No data" : ag.navAttended ? "✓ Attended" : "✗ Not attended"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* ShyftOff progress bar */}
+                    {ag.shyftoffPct !== null && (
+                      <div className="mt-3">
+                        <div className="text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#7a5f9a" }}>ShyftOff Progress</div>
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: "#3d2057" }}>
                             <div className="h-full rounded-full transition-all" style={{
-                              width: `${filtered[expandedRow].shyftoffPct}%`,
-                              background: filtered[expandedRow].shyftoffComplete ? "#22c55e" : filtered[expandedRow].shyftoffPct > 0 ? "#FFE566" : "#FF7866",
+                              width: `${ag.shyftoffPct}%`,
+                              background: ag.shyftoffComplete ? "#22c55e" : ag.shyftoffPct > 0 ? "#FFE566" : "#FF7866",
                             }} />
                           </div>
-                          <span className="font-bold text-sm" style={{
-                            fontFamily: "'IBM Plex Mono', monospace",
-                            color: filtered[expandedRow].shyftoffComplete ? "#4ade80" : filtered[expandedRow].shyftoffPct > 0 ? "#FFE566" : "#FF7866",
-                          }}>
-                            {filtered[expandedRow].shyftoffPct}%
+                          <span className="font-bold text-xs" style={{ fontFamily: "'IBM Plex Mono', monospace", color: ag.shyftoffComplete ? "#4ade80" : "#FFE566" }}>
+                            {ag.shyftoffPct}%
                           </span>
                         </div>
-                        <div className="text-xs" style={{ color: "#7a5f9a" }}>
-                          Required courses: {SHYFTOFF_COURSES.join(", ")}
-                        </div>
-                        <div className="text-xs mt-1" style={{ color: filtered[expandedRow].shyftoffComplete ? "#4ade80" : "#FFE566" }}>
-                          {filtered[expandedRow].shyftoffComplete ? "✓ All certification courses completed" : "In progress — 100% required for production readiness"}
-                        </div>
                       </div>
-                    ) : (
-                      <div className="text-xs" style={{ color: "#5c3d7a" }}>No certification data available</div>
                     )}
-                    <div className="mt-3 text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
-                      Navigation Meeting
-                    </div>
-                    <div className="text-xs" style={{ color: filtered[expandedRow].navAttended ? "#4ade80" : "#FF7866" }}>
-                      {!filtered[expandedRow].navAvailable ? "No nav meeting data uploaded" : filtered[expandedRow].navAttended ? "✓ Attended" : "✗ Not found in attendance list"}
-                    </div>
-                    <div className="mt-3 text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
-                      Pipeline Status
-                    </div>
-                    <div className="space-y-1 text-xs">
-                      <div>
-                        <span style={{ color: "#7a5f9a" }}>Has Credentials (in Litmos): </span>
-                        <span style={{ color: filtered[expandedRow].inLitmos ? "#4ade80" : "#FF7866" }}>
-                          {filtered[expandedRow].inLitmos ? "Yes" : "No"}
-                        </span>
+
+                    {/* Anomaly alerts */}
+                    {(ag.isGhost || ag.isStaleWaiter || ag.hasAccountIssue) && (
+                      <div className="mt-3 space-y-1.5">
+                        <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Alerts</div>
+                        {ag.isGhost && (
+                          <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#3d152533", border: "1px solid #4D1F3B", color: "#FF7866" }}>
+                            In Nesting without credentials — shouldn't be in this status
+                          </div>
+                        )}
+                        {ag.isStaleWaiter && (
+                          <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B", color: "#FF7866" }}>
+                            Waiting {ag.daysSinceChange}+ days for credentials — likely account issue
+                          </div>
+                        )}
+                        {ag.hasAccountIssue && (
+                          <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B", color: "#FFE566" }}>
+                            BG check: {ag.bgStatus} — blocking progress
+                          </div>
+                        )}
                       </div>
-                      <div>
-                        <span style={{ color: "#7a5f9a" }}>CCAAS ID: </span>
-                        <span style={{ color: filtered[expandedRow].hasCcaas ? "#4ade80" : "#FFE566" }}>
-                          {filtered[expandedRow].hasCcaas ? "Assigned" : "Not assigned"}
-                        </span>
-                      </div>
-                      <div>
-                        <span style={{ color: "#7a5f9a" }}>Background Check: </span>
-                        <span style={{ color: filtered[expandedRow].bgCleared ? "#4ade80" : "#FFE566" }}>
-                          {filtered[expandedRow].bgStatus || "unknown"}
-                        </span>
-                      </div>
-                      {filtered[expandedRow].daysSinceChange !== null && (
-                        <div>
-                          <span style={{ color: "#7a5f9a" }}>Days since last status change: </span>
-                          <span style={{ color: filtered[expandedRow].daysSinceChange >= 21 ? "#FF7866" : "#b8a5d4" }}>
-                            {filtered[expandedRow].daysSinceChange}d
-                          </span>
-                        </div>
-                      )}
-                      {(filtered[expandedRow].isGhost || filtered[expandedRow].isWaitingForCreds || filtered[expandedRow].hasAccountIssue) && (
-                        <div className="mt-2 space-y-1">
-                          {filtered[expandedRow].isGhost && (
-                            <div className="rounded px-2 py-1" style={{ background: "#3d152533", border: "1px solid #4D1F3B" }}>
-                              <span style={{ color: "#FF7866" }}>In Nesting but not in Litmos — likely doesn't have credentials and shouldn't be in this status</span>
-                            </div>
-                          )}
-                          {filtered[expandedRow].isStaleWaiter && (
-                            <div className="rounded px-2 py-1" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B" }}>
-                              <span style={{ color: "#FF7866" }}>Waiting {filtered[expandedRow].daysSinceChange}+ days for credentials — likely account issue</span>
-                            </div>
-                          )}
-                          {filtered[expandedRow].hasAccountIssue && (
-                            <div className="rounded px-2 py-1" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B" }}>
-                              <span style={{ color: "#FFE566" }}>Background check status: {filtered[expandedRow].bgStatus} — blocking progress</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                    )}
                   </div>
                 </div>
               </div>
-            )}
+              );
+            })()}
 
             <div className="mt-3 text-xs text-center" style={{ color: "#4D1F3B" }}>
               Showing {filtered.length} of {results.length} agents • Click any row for full breakdown
