@@ -209,6 +209,32 @@ export default function ProductionReadinessChecker() {
   const [expandedRow, setExpandedRow] = useState(null);
   const [showEmail, setShowEmail] = useState(false);
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [copiedIdx, setCopiedIdx] = useState(null);
+
+  const handleCopyAgent = (a, idx, e) => {
+    e.stopPropagation();
+    const flags = [];
+    if (a.isGhost) flags.push("NOT IN LITMOS");
+    if (a.isWaitingForCreds) flags.push("AWAITING CREDS");
+    if (a.isStaleWaiter) flags.push("STALE " + a.daysSinceChange + "d");
+    if (a.hasAccountIssue) flags.push("BG: " + a.bgStatus);
+    const lines = [
+      a.name,
+      a.sid ? `SID: ${a.sid}` : "",
+      a.nbEmail ? `Email: ${a.nbEmail}` : "",
+      `Status: ${a.status}`,
+      `Litmos: ${a.litmosCount}/14`,
+      a.shyftoffPct !== null ? `ShyftOff: ${a.shyftoffPct}%` : "",
+      a.navAvailable ? `Nav Meeting: ${a.navAttended ? "Yes" : "No"}` : "",
+      `Readiness: ${a.readyStatus.toUpperCase()}`,
+      `Has Credentials: ${a.inLitmos ? "Yes" : "No"}`,
+      `BG Check: ${a.bgStatus || "unknown"}`,
+      flags.length ? `Flags: ${flags.join(", ")}` : "",
+    ].filter(Boolean);
+    navigator.clipboard.writeText(lines.join("\n"));
+    setCopiedIdx(idx);
+    setTimeout(() => setCopiedIdx(null), 1500);
+  };
 
   const readFiles = async (files) => {
     const all = [];
@@ -704,13 +730,23 @@ export default function ProductionReadinessChecker() {
                       <tr><td colSpan={99} className="text-center py-8" style={{ color: "#5c3d7a" }}>No agents match current filters</td></tr>
                     ) : filtered.map((a, idx) => (
                       <tr key={a.key + idx}
-                        className="cursor-pointer transition-all"
+                        className="cursor-pointer transition-all group"
                         style={{ background: idx % 2 === 0 ? "#27133A" : "#1a0d2e", borderBottom: "1px solid #1a0d2e" }}
                         onClick={() => setExpandedRow(expandedRow === idx ? null : idx)}
                         onMouseEnter={e => e.currentTarget.style.background = "#3d2057"}
                         onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? "#27133A" : "#1a0d2e"}>
                         <td className="px-3 py-2.5">
-                          <div className="font-semibold">{a.name}</div>
+                          <div className="flex items-center gap-2">
+                            <div className="font-semibold">{a.name}</div>
+                            <button
+                              onClick={(e) => handleCopyAgent(a, idx, e)}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity px-1.5 py-0.5 rounded text-xs"
+                              style={{ background: copiedIdx === idx ? "#1a4d2e" : "#3d2057", color: copiedIdx === idx ? "#4ade80" : "#b8a5d4", fontSize: 10 }}
+                              title="Copy agent info to clipboard"
+                            >
+                              {copiedIdx === idx ? "Copied!" : "📋 Copy"}
+                            </button>
+                          </div>
                           <div className="text-xs" style={{ color: "#7a5f9a", fontFamily: "'IBM Plex Mono', monospace" }}>{a.sid}</div>
                           <div className="flex gap-1 mt-0.5 flex-wrap">
                             {a.isGhost && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d1525", color: "#FF7866", fontSize: 10 }}>NOT IN LITMOS</span>}
@@ -757,7 +793,15 @@ export default function ProductionReadinessChecker() {
 
             {expandedRow !== null && filtered[expandedRow] && (
               <div className="mt-3 rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                <div className="font-bold mb-3">{filtered[expandedRow].name} — Detail Breakdown</div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="font-bold">{filtered[expandedRow].name} — Detail Breakdown</div>
+                  <button
+                    onClick={() => handleCopyAgent(filtered[expandedRow], "detail", { stopPropagation: () => {} })}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:brightness-110"
+                    style={{ background: copiedIdx === "detail" ? "#1a4d2e" : "#3d2057", color: copiedIdx === "detail" ? "#4ade80" : "#b8a5d4" }}>
+                    {copiedIdx === "detail" ? "✓ Copied!" : "📋 Copy Agent Info"}
+                  </button>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
