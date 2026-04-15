@@ -22,12 +22,18 @@ const SHORT_LITMOS = [
   "FWA","Cultural","Compliance","Stars","Sexual Harass","Triple-S","UDAAP"
 ];
 
-const SHYFTOFF_COURSES = [
-  "Nations Benefits Certification",
-  "Nations Benefits Pre-Production",
-  "Nations Benefits Navigation Meeting Self-Guided",
-  "Nations-fiblue2026",
+// ShyftOff courses — ordered by workflow phase
+// Phase 1 (Roster): agents can access these before credentials
+const ROSTER_COURSES = [
+  "NationsBenefits Certification Course",
+  "NationsBenefits - Florida Blue 2026 Uptraining",
 ];
+// Phase 2 (Nesting): unlocked after receiving credentials
+const NESTING_COURSES = [
+  "NationsBenefits Pre-Production",
+  "Nations Benefits Navigation Meeting",
+];
+const SHYFTOFF_COURSES = [...ROSTER_COURSES, ...NESTING_COURSES];
 
 function parseCSV(text) {
   const lines = [];
@@ -116,24 +122,55 @@ function candidateEmails(fullName) {
   return [...emails];
 }
 
+// Fuzzy-match a course_code or course_name from the CIP data to our known courses
+function matchShyftoffCourse(code) {
+  const lc = (code || "").toLowerCase().replace(/[\s_-]+/g, "");
+  if (lc.includes("certification") || lc.includes("certcourse")) return ROSTER_COURSES[0];
+  if (lc.includes("floridablue") || lc.includes("fiblue") || lc.includes("flblue") || lc.includes("uptraining")) return ROSTER_COURSES[1];
+  if (lc.includes("preproduction") || lc.includes("preprod")) return NESTING_COURSES[0];
+  if (lc.includes("navigation") || lc.includes("navmeeting") || lc.includes("selfguided")) return NESTING_COURSES[1];
+  return code; // return raw if no match
+}
+
 function parseCertProgress(raw) {
-  if (!raw || raw === "") return { pct: null, map: {} };
+  if (!raw || raw === "") return { pct: null, map: {}, courseMap: {} };
   // New dashboard format: plain integer 0-100
   const asNum = Number(raw);
   if (!isNaN(asNum) && raw.trim().match(/^\d+$/)) {
-    return { pct: asNum, map: {} };
+    // Estimate per-course completion from overall percentage
+    // 4 courses, each worth 25%. Courses unlock in order: Cert → FL Blue → Pre-Prod → Nav
+    const courseMap = {};
+    const perCourse = 100 / SHYFTOFF_COURSES.length;
+    let remaining = asNum;
+    SHYFTOFF_COURSES.forEach(c => {
+      if (remaining >= perCourse) {
+        courseMap[c] = 100;
+        remaining -= perCourse;
+      } else if (remaining > 0) {
+        courseMap[c] = Math.round((remaining / perCourse) * 100);
+        remaining = 0;
+      } else {
+        courseMap[c] = 0;
+      }
+    });
+    return { pct: asNum, map: {}, courseMap };
   }
   // Old CIP format: JSON array with per-course progress
   try {
     const arr = JSON.parse(raw.replace(/""/g, '"'));
     const map = {};
+    const courseMap = {};
     arr.forEach(item => {
-      map[item.course_code] = parseFloat(item.progress) || 0;
+      const rawCode = item.course_code || item.course_name || "";
+      const pct = parseFloat(item.progress) || 0;
+      map[rawCode] = pct;
+      const matched = matchShyftoffCourse(rawCode);
+      courseMap[matched] = pct * 100; // progress is 0-1 in JSON format
     });
     const values = Object.values(map);
     const pct = values.length ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100) : 0;
-    return { pct, map };
-  } catch { return { pct: null, map: {} }; }
+    return { pct, map, courseMap };
+  } catch { return { pct: null, map: {}, courseMap: {} }; }
 }
 
 function FileUpload({ label, sublabel, onFiles, multiple, files }) {
@@ -352,6 +389,15 @@ export default function ProductionReadinessChecker() {
       const cert = parseCertProgress(row.certification_progress || "");
       const shyftoffPct = cert.pct;
       const shyftoffComplete = shyftoffPct === 100;
+      const courseMap = cert.courseMap || {};
+
+      // Per-course completion status
+      const nbCertDone = (courseMap[ROSTER_COURSES[0]] || 0) >= 100;
+      const flBlueDone = (courseMap[ROSTER_COURSES[1]] || 0) >= 100;
+      const rosterCoursesDone = nbCertDone && flBlueDone;
+      const preProdDone = (courseMap[NESTING_COURSES[0]] || 0) >= 100;
+      const navCourseDone = (courseMap[NESTING_COURSES[1]] || 0) >= 100;
+      const nestingCoursesDone = preProdDone && navCourseDone;
 
       const navAttended = navKeys.has(key) || (ldata?.email && navKeys.has(ldata.email.toLowerCase()));
 
@@ -389,8 +435,8 @@ export default function ProductionReadinessChecker() {
       const isGhost = isNesting && !inLitmos;
       // Missing CCAAS = needs ccaas_id assigned before moving to production
       const missingCcaas = !hasCcaas;
-      // Waiting for creds = everything done, BG cleared, just needs to be credentialed
-      const isWaitingForCreds = !inLitmos && bgCleared && shyftoffComplete;
+      // Waiting for creds = Roster courses done (NB Cert + FL Blue), BG cleared, not yet credentialed
+      const isWaitingForCreds = !inLitmos && bgCleared && rosterCoursesDone;
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
       const hasAccountIssue = !bgCleared && bgStatus !== "";
 
@@ -400,18 +446,23 @@ export default function ProductionReadinessChecker() {
         : (litmosCount > 0 || (shyftoffPct !== null && shyftoffPct > 0)) ? "partial" : "missing";
 
       // Determine credential eligibility reason
+      // Key trigger: Roster courses (NB Cert + FL Blue) done + BG cleared = credentials eligible
       let credentialNote = "";
       if (inLitmos) credentialNote = "Has credentials";
-      else if (shyftoffComplete && bgCleared) credentialNote = "Should be on next credentials batch";
-      else if (shyftoffComplete && !bgCleared) credentialNote = "Cert done — waiting on BG check";
-      else if (!shyftoffComplete && bgCleared) credentialNote = "BG cleared — certification in progress";
-      else credentialNote = "Not yet eligible";
+      else if (rosterCoursesDone && bgCleared) credentialNote = "Should be on next credentials batch";
+      else if (rosterCoursesDone && !bgCleared) credentialNote = "Roster courses done — waiting on BG check";
+      else if (nbCertDone && !flBlueDone && bgCleared) credentialNote = "BG cleared — FL Blue uptraining in progress";
+      else if (!rosterCoursesDone && bgCleared) credentialNote = "BG cleared — roster courses in progress";
+      else if (nbCertDone && !bgCleared) credentialNote = "NB Cert done — BG check + FL Blue pending";
+      else credentialNote = "Roster courses in progress";
 
       agents.push({
         name, sid, status, key,
         nbEmail: ldata?.email || "",
         litmosCount, litmosDone, litmosTotal: 14,
-        shyftoffPct, shyftoffComplete, certMap: cert.map,
+        shyftoffPct, shyftoffComplete, courseMap, certMap: cert.map,
+        nbCertDone, flBlueDone, rosterCoursesDone,
+        preProdDone, navCourseDone, nestingCoursesDone,
         navAttended, navAvailable: navData && navData.length > 0,
         readyStatus, allLitmos,
         inLitmos, hasCcaas, missingCcaas, bgStatus, bgCleared,
@@ -518,7 +569,7 @@ export default function ProductionReadinessChecker() {
     }
     if (stats.waitingForCreds > 0) {
       body += `\nWaiting for Credentials (${stats.waitingForCreds}):\n`;
-      body += `NB Cert 100% + BG cleared but not yet in Litmos — should be added to credentials list.\n`;
+      body += `Roster courses (NB Cert + FL Blue) complete + BG cleared but not yet in Litmos — should be added to credentials list.\n`;
       waitingNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
       if (waitingNames.length > 10) body += `• ...and ${waitingNames.length - 10} more\n`;
     }
@@ -660,7 +711,7 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#E8DFF6" }}>{stats.waitingForCreds}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        NB Certification 100% + BG check cleared but not yet in Litmos — should be added to the credentials list.
+                        Roster courses (NB Cert + FL Blue) complete + BG cleared but not in Litmos — should be on the credentials list.
                       </div>
                     </button>
                     <button onClick={() => { setFilter("stale"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#4D1F3B22", border: "1px solid #4D1F3B" }}>
@@ -669,7 +720,7 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.staleWaiters}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        NB Cert done + BG cleared but still not credentialed after 3+ weeks — usually means something is wrong with their account.
+                        Roster courses done + BG cleared but still not credentialed after 3+ weeks — likely an account issue.
                       </div>
                     </button>
                   </div>
@@ -806,37 +857,83 @@ export default function ProductionReadinessChecker() {
 
                 {/* Credential call-out banner */}
                 <div className="px-4 py-2.5 flex items-center gap-2" style={{
-                  background: ag.shyftoffComplete && ag.bgCleared && !ag.inLitmos ? "#794EC233"
+                  background: ag.rosterCoursesDone && ag.bgCleared && !ag.inLitmos ? "#794EC233"
                     : ag.hasAccountIssue ? "#4D1F3B33"
                     : "#27133A",
                   borderBottom: "1px solid #3d2057",
                 }}>
                   <span className="text-sm" style={{
-                    color: ag.shyftoffComplete && ag.bgCleared && !ag.inLitmos ? "#FFE566"
+                    color: ag.rosterCoursesDone && ag.bgCleared && !ag.inLitmos ? "#FFE566"
                       : ag.inLitmos ? "#4ade80"
                       : ag.hasAccountIssue ? "#FF7866"
                       : "#b8a5d4",
                     fontWeight: 600,
                   }}>
-                    {ag.shyftoffComplete && ag.bgCleared && !ag.inLitmos ? "⚡ " : ""}
+                    {ag.rosterCoursesDone && ag.bgCleared && !ag.inLitmos ? "⚡ " : ""}
                     {ag.credentialNote}
                   </span>
                 </div>
 
-                {/* Quick status row — the 4 things you need to know at a glance */}
-                <div className="grid grid-cols-4 gap-0" style={{ borderBottom: "1px solid #3d2057" }}>
-                  <div className="px-4 py-3 text-center" style={{ borderRight: "1px solid #3d2057" }}>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>NB Certification</div>
-                    <div className="text-lg font-black" style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      color: ag.shyftoffComplete ? "#4ade80" : ag.shyftoffPct > 0 ? "#FFE566" : "#FF7866"
-                    }}>
-                      {ag.shyftoffPct !== null ? `${ag.shyftoffPct}%` : "N/A"}
+                {/* ShyftOff Courses — two phases */}
+                <div className="px-4 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Phase 1: Roster courses */}
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2" style={{ color: "#7a5f9a" }}>
+                        <span>Phase 1 — Roster</span>
+                        {ag.rosterCoursesDone && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#1a4d2e", color: "#4ade80", fontSize: 10 }}>COMPLETE</span>}
+                      </div>
+                      {ROSTER_COURSES.map((course, i) => {
+                        const pct = ag.courseMap[course] || 0;
+                        const done = pct >= 100;
+                        return (
+                          <div key={i} className="flex items-center gap-2 mb-1.5">
+                            <div className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
+                              style={{ background: done ? "#1a4d2e" : "#3d2057", color: done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                              {done ? "✓" : pct > 0 ? "◔" : "○"}
+                            </div>
+                            <div className="flex-1">
+                              <div className="text-xs font-semibold" style={{ color: done ? "#E8DFF6" : "#b8a5d4" }}>{course}</div>
+                              <div className="text-xs" style={{ color: done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                                {done ? "Complete" : pct > 0 ? `${pct}% in progress` : "Not started"}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <div className="text-xs mt-0.5" style={{ color: ag.shyftoffComplete ? "#4ade80" : "#7a5f9a" }}>
-                      {ag.shyftoffComplete ? "✓ Complete" : "In Progress"}
+                    {/* Phase 2: Nesting courses (requires credentials) */}
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2" style={{ color: "#7a5f9a" }}>
+                        <span>Phase 2 — Nesting</span>
+                        {!ag.inLitmos && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#7a5f9a", fontSize: 10 }}>LOCKED</span>}
+                        {ag.inLitmos && ag.nestingCoursesDone && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#1a4d2e", color: "#4ade80", fontSize: 10 }}>COMPLETE</span>}
+                      </div>
+                      {NESTING_COURSES.map((course, i) => {
+                        const pct = ag.courseMap[course] || 0;
+                        const done = pct >= 100;
+                        const locked = !ag.inLitmos;
+                        return (
+                          <div key={i} className="flex items-center gap-2 mb-1.5" style={{ opacity: locked ? 0.5 : 1 }}>
+                            <div className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
+                              style={{ background: done ? "#1a4d2e" : "#3d2057", color: done ? "#4ade80" : locked ? "#5c3d7a" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                              {locked ? "🔒" : done ? "✓" : pct > 0 ? "◔" : "○"}
+                            </div>
+                            <div className="flex-1">
+                              <div className="text-xs font-semibold" style={{ color: done ? "#E8DFF6" : "#b8a5d4" }}>{course}</div>
+                              <div className="text-xs" style={{ color: locked ? "#5c3d7a" : done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                                {locked ? "Requires credentials" : done ? "Complete" : pct > 0 ? `${pct}% in progress` : "Not started"}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
+                </div>
+
+                {/* Quick status row — BG, Credentials, Last Change */}
+                <div className="grid grid-cols-3 gap-0" style={{ borderBottom: "1px solid #3d2057" }}>
                   <div className="px-4 py-3 text-center" style={{ borderRight: "1px solid #3d2057" }}>
                     <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>BG Check</div>
                     <div className="text-lg font-black" style={{ color: ag.bgCleared ? "#4ade80" : ag.bgStatus ? "#FFE566" : "#7a5f9a" }}>
@@ -926,24 +1023,6 @@ export default function ProductionReadinessChecker() {
                         </span>
                       </div>
                     </div>
-
-                    {/* ShyftOff progress bar */}
-                    {ag.shyftoffPct !== null && (
-                      <div className="mt-3">
-                        <div className="text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#7a5f9a" }}>ShyftOff Progress</div>
-                        <div className="flex items-center gap-3">
-                          <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: "#3d2057" }}>
-                            <div className="h-full rounded-full transition-all" style={{
-                              width: `${ag.shyftoffPct}%`,
-                              background: ag.shyftoffComplete ? "#22c55e" : ag.shyftoffPct > 0 ? "#FFE566" : "#FF7866",
-                            }} />
-                          </div>
-                          <span className="font-bold text-xs" style={{ fontFamily: "'IBM Plex Mono', monospace", color: ag.shyftoffComplete ? "#4ade80" : "#FFE566" }}>
-                            {ag.shyftoffPct}%
-                          </span>
-                        </div>
-                      </div>
-                    )}
 
                     {/* Anomaly alerts */}
                     {(ag.isGhost || ag.isStaleWaiter || ag.hasAccountIssue) && (
