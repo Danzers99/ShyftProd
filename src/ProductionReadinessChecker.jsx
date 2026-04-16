@@ -459,7 +459,11 @@ export default function ProductionReadinessChecker() {
       if (!bgStatus && cipBgProcess) {
         bgStatus = cipBgProcess === "PASSED" ? "cleared" : cipBgReport || cipBgProcess.toLowerCase();
       }
-      const bgCleared = bgStatus === "cleared" || cipBgProcess === "PASSED";
+      // BG is cleared if: simple status says "cleared", OR CIP process says PASSED,
+      // OR CIP report says "clear"/"proceed" (report IS the actual BG result,
+      // process may lag behind due to system integration)
+      const bgReportClear = cipBgReport === "clear" || cipBgReport === "proceed";
+      const bgCleared = bgStatus === "cleared" || cipBgProcess === "PASSED" || bgReportClear;
       const createdAt = row.created_at ? new Date(row.created_at) : null;
       const lastChanged = row.last_changed || row.status_updated_at || "";
       const changedAt = lastChanged ? new Date(lastChanged) : null;
@@ -479,8 +483,9 @@ export default function ProductionReadinessChecker() {
       const isGhost = isNesting && !inLitmos;
       // Missing CCAAS = needs ccaas_id assigned before moving to production
       const missingCcaas = !hasCcaas;
-      // BG mismatch: simple status says cleared but CIP JSON says still IN_PROGRESS
-      const isBgMismatch = bgCleared && cipBgProcess === "IN_PROGRESS";
+      // BG mismatch: BG is effectively cleared (report=clear or simple=cleared)
+      // but the CIP process_status hasn't caught up (still IN_PROGRESS)
+      const isBgMismatch = bgCleared && cipBgProcess === "IN_PROGRESS" && cipBgProcess !== "" ;
       // Waiting for creds = Roster courses done (NB Cert + FL Blue), BG cleared, not yet credentialed
       const isWaitingForCreds = !inLitmos && bgCleared && rosterCoursesDone;
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
