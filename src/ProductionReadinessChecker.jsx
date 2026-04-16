@@ -365,21 +365,38 @@ export default function ProductionReadinessChecker() {
     }
 
     // Deduplicate agents by ShyftOff ID when multiple files are uploaded
-    // Merge rows: keep richer data (CIP BG JSON + Roster/Nesting simple fields)
+    // Merge strategy: Roster/Nesting exports have accurate course progress (integer)
+    // and simple BG status. CIP export has detailed BG JSON for mismatch detection.
+    // Keep both, but prefer Roster/Nesting for course data.
     const seenSids = new Map();
     cipData.forEach(row => {
       const sid = (row.shyftoff_id || "").trim();
       if (!sid) return;
       if (seenSids.has(sid)) {
         const existing = seenSids.get(sid);
-        // Merge: overlay CIP JSON bg if the existing row doesn't have it
+        // BG: keep CIP JSON for mismatch detection, keep simple status from Roster
         if (row.background_check && !existing.background_check) existing.background_check = row.background_check;
-        // Merge: overlay simple bg status if existing doesn't have it
         if (row.background_check_status && !existing.background_check_status) existing.background_check_status = row.background_check_status;
-        // Merge: keep stale_level if available
+        // Stale level from Roster/Nesting
         if (row.stale_level && !existing.stale_level) existing.stale_level = row.stale_level;
-        // Merge: prefer non-empty cert progress
-        if (row.certification_progress && !existing.certification_progress) existing.certification_progress = row.certification_progress;
+        // Cert progress: ALWAYS prefer Roster/Nesting integer over CIP JSON
+        // Roster/Nesting integers are accurate for ShyftOff courses; CIP JSON is not
+        if (row.certification_progress) {
+          const incoming = row.certification_progress.trim();
+          const existingCert = (existing.certification_progress || "").trim();
+          const incomingIsInteger = incoming.match(/^\d+$/);
+          const existingIsInteger = existingCert.match(/^\d+$/);
+          if (incomingIsInteger && !existingIsInteger) {
+            // Incoming is Roster integer, existing is CIP JSON — prefer Roster
+            existing.certification_progress = row.certification_progress;
+          } else if (!existingCert) {
+            existing.certification_progress = row.certification_progress;
+          }
+        }
+        // Prefer Roster/Nesting status if it has more detail
+        if (row.status && row.agent_name && !existing.agent_name) {
+          existing.agent_name = row.agent_name;
+        }
         return;
       }
       seenSids.set(sid, { ...row });
