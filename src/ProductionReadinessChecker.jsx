@@ -374,8 +374,22 @@ export default function ProductionReadinessChecker() {
       if (!sid) return;
       if (seenSids.has(sid)) {
         const existing = seenSids.get(sid);
-        // BG: keep CIP JSON for mismatch detection, keep simple status from Roster
-        if (row.background_check && !existing.background_check) existing.background_check = row.background_check;
+        // BG JSON: keep the one with actual data (non-null process_status)
+        if (row.background_check) {
+          if (!existing.background_check) {
+            existing.background_check = row.background_check;
+          } else {
+            // Both have BG JSON — prefer the one with non-null process_status
+            try {
+              const inArr = JSON.parse(row.background_check);
+              const exArr = JSON.parse(existing.background_check);
+              const inPs = inArr?.[0]?.process_status || "";
+              const exPs = exArr?.[0]?.process_status || "";
+              if (inPs && !exPs) existing.background_check = row.background_check;
+            } catch {}
+          }
+        }
+        // Simple BG status: keep any non-empty value (Roster is authoritative)
         if (row.background_check_status && !existing.background_check_status) existing.background_check_status = row.background_check_status;
         // Stale level from Roster/Nesting
         if (row.stale_level && !existing.stale_level) existing.stale_level = row.stale_level;
@@ -503,7 +517,9 @@ export default function ProductionReadinessChecker() {
       // BG mismatch: status says "Credentials Requested" (system thinks agent is ready)
       // but BG check is NOT actually cleared (process IN_PROGRESS, report pending/processing)
       // This is a systemic backend issue — the agent was moved to creds-requested prematurely
-      const isBgMismatch = isCredentialsRequested && !bgCleared && (cipBgProcess === "IN_PROGRESS" || cipBgProcess === "" || cipBgProcess === "null");
+      // BG mismatch: status says "Credentials Requested" but BG not actually cleared
+      // Core pattern: system advanced agent to creds-requested while BG is still in progress
+      const isBgMismatch = isCredentialsRequested && !bgCleared;
 
       // Credential pipeline flags (cross-referencing status + actual data)
       // Ready for credentials = courses done + BG cleared + not yet credentialed (strict, data-driven)
