@@ -490,11 +490,12 @@ export default function ProductionReadinessChecker() {
       if (!bgStatus && cipBgProcess) {
         bgStatus = cipBgProcess === "PASSED" ? "cleared" : cipBgReport || cipBgProcess.toLowerCase();
       }
-      // BG is cleared if: simple status says "cleared", OR CIP process says PASSED,
-      // OR CIP report says "clear"/"proceed" (report IS the actual BG result,
-      // process may lag behind due to system integration)
+      // BG is cleared if: CIP process says PASSED, OR CIP report says clear/proceed,
+      // OR simple status says cleared (but ONLY when CIP doesn't contradict it)
       const bgReportClear = cipBgReport === "clear" || cipBgReport === "proceed";
-      const bgCleared = bgStatus === "cleared" || cipBgProcess === "PASSED" || bgReportClear;
+      const cipContradicts = cipBgProcess === "IN_PROGRESS" && !bgReportClear && cipBgProcess !== "";
+      const bgCleared = cipBgProcess === "PASSED" || bgReportClear
+        || (bgStatus === "cleared" && !cipContradicts);
       const createdAt = row.created_at ? new Date(row.created_at) : null;
       const lastChanged = row.last_changed || row.status_updated_at || "";
       const changedAt = lastChanged ? new Date(lastChanged) : null;
@@ -514,12 +515,12 @@ export default function ProductionReadinessChecker() {
       const isGhost = isNesting && !inLitmos;
       // Missing CCAAS = needs ccaas_id assigned before moving to production
       const missingCcaas = !hasCcaas;
-      // BG mismatch: status says "Credentials Requested" (system thinks agent is ready)
-      // but BG check is NOT actually cleared (process IN_PROGRESS, report pending/processing)
-      // This is a systemic backend issue — the agent was moved to creds-requested prematurely
-      // BG mismatch: status says "Credentials Requested" but BG not actually cleared
-      // Core pattern: system advanced agent to creds-requested while BG is still in progress
-      const isBgMismatch = isCredentialsRequested && !bgCleared;
+      // BG mismatch: Roster/Nesting says "cleared" but CIP JSON says IN_PROGRESS
+      // with a non-clear report (pending/processing/consider/created).
+      // This is the cross-source discrepancy — the simple status is stale/wrong.
+      const simpleBgCleared = (row.background_check_status || "").trim().toLowerCase() === "cleared";
+      const cipBgNotCleared = cipBgProcess === "IN_PROGRESS" && !bgReportClear;
+      const isBgMismatch = simpleBgCleared && cipBgNotCleared;
 
       // Credential pipeline flags (cross-referencing status + actual data)
       // Ready for credentials = courses done + BG cleared + not yet credentialed (strict, data-driven)
@@ -545,7 +546,7 @@ export default function ProductionReadinessChecker() {
       // Key trigger: Roster courses (NB Cert + FL Blue) done + BG cleared = credentials eligible
       let credentialNote = "";
       if (inLitmos) credentialNote = "Has credentials";
-      else if (isBgMismatch) credentialNote = "BG mismatch — credentials requested but BG not cleared";
+      else if (isBgMismatch) credentialNote = "BG mismatch — Roster says cleared but CIP shows in progress";
       else if (rosterCoursesDone && bgCleared) credentialNote = "Should be on next credentials batch";
       else if (rosterCoursesDone && !bgCleared) credentialNote = "Roster courses done — waiting on BG check";
       else if (nbCertDone && !flBlueDone && bgCleared) credentialNote = "BG cleared — FL Blue uptraining in progress";
@@ -698,7 +699,7 @@ export default function ProductionReadinessChecker() {
     }
     if (bgMismatchNames.length > 0) {
       body += `\nBG Check Mismatch (${bgMismatchNames.length}):\n`;
-      body += `Status shows "Credentials Requested" but BG check not cleared — systemic backend mismatch.\n`;
+      body += `Roster shows BG "cleared" but CIP export shows In Progress — cross-source BG mismatch.\n`;
       bgMismatchNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
       if (bgMismatchNames.length > 10) body += `• ...and ${bgMismatchNames.length - 10} more\n`;
     }
@@ -861,7 +862,7 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.staleBgMismatch}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Status says "Credentials Requested" but BG not cleared — moved to creds-requested prematurely.
+                        Roster shows BG "cleared" but CIP export shows In Progress — cross-source mismatch.
                       </div>
                     </button>
                     )}
@@ -1223,7 +1224,7 @@ export default function ProductionReadinessChecker() {
                   )}
                   {ag.isBgMismatch && (
                     <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#FFE56615", border: "1px solid #FFE566", color: "#FFE566" }}>
-                      BG Mismatch: Status is "Credentials Requested" but BG not cleared — process: {ag.cipBgProcess || "unknown"}, report: {ag.cipBgReport || "unknown"}. Agent was moved to creds-requested prematurely.
+                      BG Mismatch: Roster shows "cleared" but CIP export shows process: {ag.cipBgProcess || "unknown"}, report: {ag.cipBgReport || "unknown"}. The CIP data is the source of truth — BG is not actually cleared.
                     </div>
                   )}
                   {ag.shyftoffStaleLevel && (
