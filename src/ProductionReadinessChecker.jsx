@@ -802,81 +802,80 @@ export default function ProductionReadinessChecker() {
             </div>
 
             {activeTab === "insights" && (
-              <div className="grid grid-cols-2 gap-3 mb-5">
-                <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                  <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#7a5f9a" }}>Status Anomalies</div>
-                  <div className="space-y-3">
-                    <button onClick={() => { setFilter("ghosts"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#3d152522", border: "1px solid #4D1F3B" }}>
+              <div className="mb-5">
+                {/* Row 1: Anomalies + BG Issues — combined "Pipeline Health" section */}
+                <div className="grid grid-cols-3 gap-3 mb-3">
+                  <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>Ghosts</div>
+                    <button onClick={() => setFilter(filter === "ghosts" ? "all" : "ghosts")} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "ghosts" ? "#3d152544" : "#3d152522", border: `1px solid ${filter === "ghosts" ? "#FF7866" : "#4D1F3B"}` }}>
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Nesting Without Credentials</span>
                         <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.ghosts}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Agents in "Nesting" but not in Litmos — no credentials. If they've completed NB Certification + BG cleared, they need to be credentialed first.
-                      </div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>In "Nesting" status but no Litmos account — shouldn't be here without credentials.</div>
                     </button>
-                    <button onClick={() => { setFilter("account_issues"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#4D1F3B22", border: "1px solid #4D1F3B" }}>
+                  </div>
+                  <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>BG Check — Blocked</div>
+                    <button onClick={() => setFilter(filter === "account_issues" ? "all" : "account_issues")} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "account_issues" ? "#4D1F3B44" : "#4D1F3B22", border: `1px solid ${filter === "account_issues" ? "#FFE566" : "#4D1F3B"}` }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#FFE566" }}>Account Issues</span>
+                        <span className="text-sm font-bold" style={{ color: "#FFE566" }}>BG Pending / Created</span>
                         <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.accountIssues}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Background check not cleared (status: pending or created). These agents are blocked from progressing.
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>BG check status is "pending" or "created" — blocked from progressing until cleared.</div>
+                    </button>
+                  </div>
+                  <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>BG Check — Data Mismatch</div>
+                    <button onClick={() => setFilter(filter === "stale_bg" ? "all" : "stale_bg")} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "stale_bg" ? "#FFE56630" : "#FFE56615", border: `1px solid ${filter === "stale_bg" ? "#FFE566" : "#FFE56666"}` }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold" style={{ color: "#FFE566" }}>Roster ≠ CIP Export</span>
+                        <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.staleBgMismatch}</span>
                       </div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>Roster says BG "cleared" but CIP export says "In Progress" — cross-source mismatch. Flag to Product.</div>
                     </button>
                   </div>
                 </div>
+
+                {/* Row 2: Credential Pipeline */}
                 <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                  <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>Credential Pipeline</div>
-                  {/* Pipeline summary bar */}
-                  <div className="text-xs mb-3 flex items-center gap-2" style={{ color: "#5c3d7a" }}>
-                    <span>{stats.credsRequestedTotal} with "Credentials Requested" status</span>
-                    <span>•</span>
-                    <span>{stats.alreadyCredentialed} already credentialed</span>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Credential Pipeline</div>
+                    <div className="text-xs flex items-center gap-3" style={{ color: "#5c3d7a" }}>
+                      <span>{stats.credsRequestedTotal} with "Credentials Requested" status</span>
+                      <span>•</span>
+                      <span>{stats.alreadyCredentialed} already in Litmos</span>
+                    </div>
                   </div>
-                  <div className="space-y-3">
-                    <button onClick={() => { setFilter("waiting_creds"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#794EC222", border: "1px solid #794EC2" }}>
+                  <div className="grid grid-cols-4 gap-3">
+                    <button onClick={() => setFilter(filter === "waiting_creds" ? "all" : "waiting_creds")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "waiting_creds" ? "#794EC244" : "#794EC222", border: `1px solid ${filter === "waiting_creds" ? "#8F68D3" : "#794EC2"}` }}>
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-sm font-bold" style={{ color: "#8F68D3" }}>Ready for Credentials</span>
                         <span className="text-2xl font-black" style={{ color: "#E8DFF6" }}>{stats.waitingForCreds}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Courses done + BG cleared + not in Litmos — verified by cross-referencing actual data, not just status.
-                      </div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>Courses done + BG cleared + not in Litmos. Credential these agents next.</div>
                     </button>
-                    {stats.credsRequestedNoCourses > 0 && (
-                    <button onClick={() => { setFilter("creds_no_courses"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#3d205722", border: "1px solid #3d2057" }}>
+                    <button onClick={() => setFilter(filter === "creds_no_courses" ? "all" : "creds_no_courses")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "creds_no_courses" ? "#3d205744" : "#3d205722", border: `1px solid ${filter === "creds_no_courses" ? "#b8a5d4" : "#3d2057"}` }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#b8a5d4" }}>Creds Requested — Courses Not Done</span>
+                        <span className="text-sm font-bold" style={{ color: "#b8a5d4" }}>Courses Incomplete</span>
                         <span className="text-2xl font-black" style={{ color: "#b8a5d4" }}>{stats.credsRequestedNoCourses}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#5c3d7a" }}>
-                        Status says "Credentials Requested" but roster courses (NB Cert + FL Blue) aren't actually complete. Status advanced prematurely.
-                      </div>
+                      <div className="text-xs" style={{ color: "#5c3d7a" }}>Status says "Creds Requested" but NB Cert + FL Blue not done. Status advanced early.</div>
                     </button>
-                    )}
-                    {stats.staleBgMismatch > 0 && (
-                    <button onClick={() => { setFilter("stale_bg"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#FFE56615", border: "1px solid #FFE566" }}>
+                    <button onClick={() => setFilter(filter === "stale_true" ? "all" : "stale_true")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "stale_true" ? "#4D1F3B44" : "#4D1F3B22", border: `1px solid ${filter === "stale_true" ? "#FF7866" : "#4D1F3B"}` }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#FFE566" }}>BG Check Mismatch</span>
-                        <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.staleBgMismatch}</span>
-                      </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Roster shows BG "cleared" but CIP export shows In Progress — cross-source mismatch.
-                      </div>
-                    </button>
-                    )}
-                    {stats.trulyStale > 0 && (
-                    <button onClick={() => { setFilter("stale_true"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#4D1F3B22", border: "1px solid #4D1F3B" }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Truly Stale (3+ Weeks)</span>
+                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Stale 3+ Weeks</span>
                         <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.trulyStale}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Courses done + BG cleared but not credentialed after 3+ weeks — needs investigation.
-                      </div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>Ready for 3+ weeks but still not credentialed. Needs manual investigation.</div>
                     </button>
-                    )}
+                    <button onClick={() => setFilter(filter === "stale_queue" ? "all" : "stale_queue")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "stale_queue" ? "#3d205744" : "#3d205722", border: `1px solid ${filter === "stale_queue" ? "#b8a5d4" : "#3d2057"}` }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold" style={{ color: "#b8a5d4" }}>Stale — In Queue</span>
+                        <span className="text-2xl font-black" style={{ color: "#b8a5d4" }}>{stats.staleInQueue}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#5c3d7a" }}>Creds requested 3+ weeks ago. Check if batch was processed.</div>
+                    </button>
                   </div>
                 </div>
               </div>
