@@ -623,6 +623,16 @@ export default function ProductionReadinessChecker() {
     };
   }, [results]);
 
+  const downloadCsv = (headers, rows, filename) => {
+    const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+  };
+
   const handleExport = () => {
     if (!filtered.length) return;
     const headers = ["Agent Name","ShyftOff ID","CIP Status","NB Email","Litmos (done/14)","ShyftOff Cert %","Nav Meeting","Readiness","In Litmos (Has Creds)","CCAAS ID","BG Check","Days Since Change","Flags"];
@@ -632,6 +642,7 @@ export default function ProductionReadinessChecker() {
       if (a.isWaitingForCreds) flags.push("WAITING_CREDS");
       if (a.isStaleWaiter) flags.push("STALE");
       if (a.hasAccountIssue) flags.push("BG_ISSUE");
+      if (a.isBgMismatch) flags.push("BG_MISMATCH");
       return [
         a.name, a.sid, a.status, a.nbEmail,
         `${a.litmosCount}/14`,
@@ -645,13 +656,52 @@ export default function ProductionReadinessChecker() {
         flags.join("; ") || "",
       ];
     });
-    const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "production_readiness_report.csv";
-    link.click();
+    downloadCsv(headers, rows, "production_readiness_report.csv");
+  };
+
+  const handleExportIssues = () => {
+    if (!results) return;
+    const issueAgents = results.filter(a => a.isBgMismatch || a.hasAccountIssue || a.isGhost || a.isTrulyStale || a.isStaleInQueue);
+    if (!issueAgents.length) return;
+    const today = new Date().toISOString().split("T")[0];
+    const headers = [
+      "Issue Type","Agent Name","ShyftOff ID","CIP Status",
+      "Roster BG Status","CIP BG Process","CIP BG Report",
+      "Has Credentials (Litmos)","Cert Progress %",
+      "NB Cert Done","FL Blue Done","Days in Status","Action Needed"
+    ];
+    const rows = issueAgents.map(a => {
+      let issueType = "";
+      let action = "";
+      if (a.isBgMismatch) {
+        issueType = "BG Data Mismatch";
+        action = "Roster shows cleared but CIP shows In Progress. Investigate BG check system sync.";
+      } else if (a.hasAccountIssue) {
+        issueType = "BG Pending/Created";
+        action = "Background check not cleared. Agent blocked from progressing.";
+      } else if (a.isGhost) {
+        issueType = "Nesting Without Credentials";
+        action = "In Nesting status but no Litmos account. Needs credentialing or status correction.";
+      } else if (a.isTrulyStale) {
+        issueType = "Stale 3+ Weeks";
+        action = "Ready for credentials 3+ weeks but not processed. Manual investigation needed.";
+      } else if (a.isStaleInQueue) {
+        issueType = "Stale — In Queue";
+        action = "Credentials requested 3+ weeks ago. Check if batch was processed.";
+      }
+      return [
+        issueType, a.name, a.sid, a.status,
+        a.bgStatus || "N/A", a.cipBgProcess || "N/A", a.cipBgReport || "N/A",
+        a.inLitmos ? "YES" : "NO",
+        a.shyftoffPct !== null ? a.shyftoffPct : "N/A",
+        a.nbCertDone ? "YES" : "NO", a.flBlueDone ? "YES" : "NO",
+        a.daysSinceChange !== null ? a.daysSinceChange : "N/A",
+        action,
+      ];
+    });
+    // Sort by issue type so BG mismatches are grouped together
+    rows.sort((a, b) => a[0].localeCompare(b[0]));
+    downloadCsv(headers, rows, `pipeline_issues_${today}.csv`);
   };
 
   const emailBody = useMemo(() => {
@@ -783,6 +833,9 @@ export default function ProductionReadinessChecker() {
             <>
               <button onClick={handleExport} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:bg-purple-900/30" style={{ borderColor: "#4D1F3B", color: "#b8a5d4" }}>
                 Export CSV
+              </button>
+              <button onClick={handleExportIssues} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:brightness-110" style={{ borderColor: "#FFE566", color: "#FFE566" }}>
+                Export Issues
               </button>
               <button onClick={() => setShowEmail(true)} className="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:brightness-110" style={{ background: "#FF66C4", color: "#fff" }}>
                 Generate Email
