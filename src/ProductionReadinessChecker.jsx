@@ -245,8 +245,15 @@ export default function ProductionReadinessChecker() {
   const [filter, setFilter] = useState("all");
   const [expandedRow, setExpandedRow] = useState(null);
   const [showEmail, setShowEmail] = useState(false);
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const [openSections, setOpenSections] = useState(new Set(["flblue", "health"]));
   const [copiedIdx, setCopiedIdx] = useState(null);
+  const [showDetailCols, setShowDetailCols] = useState(false);
+
+  const toggleSection = (key) => setOpenSections(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
 
   const handleCopyAgent = (a, idx, e) => {
     e.stopPropagation();
@@ -578,8 +585,49 @@ export default function ProductionReadinessChecker() {
     return agents;
   }, [litmosData, cipData, prodData, navData, peopleData]);
 
+  // Process production agents for FL Blue tracking
+  const prodAgents = useMemo(() => {
+    if (!prodData || !prodData.length) return [];
+    return prodData.map(r => {
+      const name = (r.full_name || r.agent_nm || r.agent_name || "").trim();
+      const sid = (r.so_agent_id || r.shyftoff_id || "").trim();
+      const certRaw = (r.certification_progress || "").trim();
+      const certPct = certRaw.match(/^\d+$/) ? parseInt(certRaw) : null;
+      return {
+        name, sid, certPct, isProd: true,
+        flBlueComplete: certPct === 100,
+        flBlueLikelyMissing: certPct !== null && certPct < 100,
+        flBlueMissingOnly: certPct === 75,
+        status: r.agent_campaign_status || "Production",
+        bgStatus: (r.background_check_status || "").trim().toLowerCase(),
+      };
+    });
+  }, [prodData]);
+
+  const prodStats = useMemo(() => {
+    if (!prodAgents.length) return null;
+    return {
+      total: prodAgents.length,
+      certComplete: prodAgents.filter(a => a.flBlueComplete).length,
+      certBelow100: prodAgents.filter(a => a.flBlueLikelyMissing).length,
+      at75: prodAgents.filter(a => a.flBlueMissingOnly).length,
+    };
+  }, [prodAgents]);
+
   const filtered = useMemo(() => {
     if (!results) return [];
+    // Production filters return prod agents instead of pipeline agents
+    const prodFilters = ["production", "prod_flblue_incomplete", "prod_flblue_75"];
+    if (prodFilters.includes(filter)) {
+      let out = prodAgents;
+      if (filter === "prod_flblue_incomplete") out = out.filter(a => a.flBlueLikelyMissing);
+      if (filter === "prod_flblue_75") out = out.filter(a => a.flBlueMissingOnly);
+      if (search) {
+        const s = search.toLowerCase();
+        out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s));
+      }
+      return out;
+    }
     let out = results;
     if (filter === "ready") out = out.filter(a => a.readyStatus === "ready");
     if (filter === "partial") out = out.filter(a => a.readyStatus === "partial");
@@ -594,12 +642,14 @@ export default function ProductionReadinessChecker() {
     if (filter === "stale_true") out = out.filter(a => a.isTrulyStale);
     if (filter === "stale_bg") out = out.filter(a => a.isBgMismatch);
     if (filter === "account_issues") out = out.filter(a => a.hasAccountIssue);
+    if (filter === "flblue_done") out = out.filter(a => a.flBlueDone);
+    if (filter === "flblue_incomplete") out = out.filter(a => !a.flBlueDone);
     if (search) {
       const s = search.toLowerCase();
-      out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s) || a.nbEmail.toLowerCase().includes(s));
+      out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s) || (a.nbEmail || "").toLowerCase().includes(s));
     }
     return out;
-  }, [results, filter, search]);
+  }, [results, prodAgents, filter, search]);
 
   const stats = useMemo(() => {
     if (!results) return null;
@@ -620,6 +670,8 @@ export default function ProductionReadinessChecker() {
       trulyStale: results.filter(a => a.isTrulyStale).length,
       staleBgMismatch: results.filter(a => a.isBgMismatch).length,
       accountIssues: results.filter(a => a.hasAccountIssue).length,
+      flBlueDone: results.filter(a => a.flBlueDone).length,
+      flBlueIncomplete: results.filter(a => !a.flBlueDone).length,
     };
   }, [results]);
 
@@ -800,14 +852,12 @@ export default function ProductionReadinessChecker() {
             </div>
           </div>
           {hasData && (
-            <div className="flex gap-1">
-              {[{k:"dashboard",l:"Dashboard"},{k:"insights",l:"Pipeline Insights"},{k:"details",l:"Detail View"}].map(tab => (
-                <button key={tab.k} onClick={() => setActiveTab(tab.k)}
-                  className="px-3 py-1.5 rounded-md text-xs font-semibold transition-all"
-                  style={{ background: activeTab === tab.k ? "#8F68D3" : "transparent", color: activeTab === tab.k ? "#27133A" : "#b8a5d4" }}>
-                  {tab.l}
-                </button>
-              ))}
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowDetailCols(!showDetailCols)}
+                className="px-3 py-1.5 rounded-md text-xs font-semibold transition-all"
+                style={{ background: showDetailCols ? "#8F68D3" : "transparent", color: showDetailCols ? "#27133A" : "#b8a5d4" }}>
+                {showDetailCols ? "Hide Course Cols" : "Show Course Cols"}
+              </button>
             </div>
           )}
         </div>
@@ -854,102 +904,180 @@ export default function ProductionReadinessChecker() {
               <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#FFE566" : "#5c3d7a"} />
             </div>
 
-            {activeTab === "insights" && (
-              <div className="mb-5">
-                {/* Row 1: Anomalies + BG Issues — combined "Pipeline Health" section */}
-                <div className="grid grid-cols-3 gap-3 mb-3">
-                  <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>Ghosts</div>
-                    <button onClick={() => setFilter(filter === "ghosts" ? "all" : "ghosts")} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "ghosts" ? "#3d152544" : "#3d152522", border: `1px solid ${filter === "ghosts" ? "#FF7866" : "#4D1F3B"}` }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Nesting Without Credentials</span>
-                        <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.ghosts}</span>
-                      </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>In "Nesting" status but no Litmos account — shouldn't be here without credentials.</div>
-                    </button>
-                  </div>
-                  <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>BG Check — Blocked</div>
-                    <button onClick={() => setFilter(filter === "account_issues" ? "all" : "account_issues")} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "account_issues" ? "#4D1F3B44" : "#4D1F3B22", border: `1px solid ${filter === "account_issues" ? "#FFE566" : "#4D1F3B"}` }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#FFE566" }}>BG Pending / Created</span>
-                        <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.accountIssues}</span>
-                      </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>BG check status is "pending" or "created" — blocked from progressing until cleared.</div>
-                    </button>
-                  </div>
-                  <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                    <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>BG Check — Data Mismatch</div>
-                    <button onClick={() => setFilter(filter === "stale_bg" ? "all" : "stale_bg")} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "stale_bg" ? "#FFE56630" : "#FFE56615", border: `1px solid ${filter === "stale_bg" ? "#FFE566" : "#FFE56666"}` }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#FFE566" }}>Roster ≠ CIP Export</span>
-                        <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.staleBgMismatch}</span>
-                      </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>Roster says BG "cleared" but CIP export says "In Progress" — cross-source mismatch. Flag to Product.</div>
-                    </button>
-                  </div>
+            {/* === SECTION: FL Blue Uptraining === */}
+            <div className="mb-3 rounded-xl overflow-hidden" style={{ border: "1px solid #3d2057" }}>
+              <button onClick={() => toggleSection("flblue")} className="w-full flex items-center justify-between px-4 py-2.5 transition-all hover:brightness-110" style={{ background: "#1a0d2e" }}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs" style={{ color: "#7a5f9a" }}>{openSections.has("flblue") ? "▾" : "▸"}</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>FL Blue 2026 Uptraining</span>
                 </div>
-
-                {/* Row 2: Credential Pipeline */}
-                <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Credential Pipeline</div>
-                    <div className="text-xs flex items-center gap-3" style={{ color: "#5c3d7a" }}>
-                      <span>{stats.credsRequestedTotal} with "Credentials Requested" status</span>
-                      <span>•</span>
-                      <span>{stats.alreadyCredentialed} already in Litmos</span>
+                <div className="flex items-center gap-3 text-xs" style={{ color: "#5c3d7a" }}>
+                  {prodStats && <span>Production: {prodStats.certComplete}/{prodStats.total} complete</span>}
+                  <span>Pipeline: {stats.flBlueDone}/{stats.total} complete</span>
+                </div>
+              </button>
+              {openSections.has("flblue") && (
+                <div className="px-4 py-3" style={{ background: "#27133A" }}>
+                  {/* Production agents */}
+                  {prodStats && (
+                    <div className="mb-3">
+                      <div className="text-xs font-semibold mb-2" style={{ color: "#7a5f9a" }}>Production Agents ({prodStats.total})</div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button onClick={() => setFilter(filter === "production" ? "all" : "production")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "production" ? "#1a4d2e44" : "#1a4d2e22", border: `1px solid ${filter === "production" ? "#4ade80" : "#1a4d2e"}` }}>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-xs font-bold" style={{ color: "#4ade80" }}>FL Blue Complete</span>
+                            <span className="text-xl font-black" style={{ color: "#4ade80" }}>{prodStats.certComplete}</span>
+                          </div>
+                          <div className="text-xs" style={{ color: "#5c3d7a" }}>Cert 100% — all courses including FL Blue done.</div>
+                        </button>
+                        <button onClick={() => setFilter(filter === "prod_flblue_incomplete" ? "all" : "prod_flblue_incomplete")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "prod_flblue_incomplete" ? "#FF786622" : "#FF786611", border: `1px solid ${filter === "prod_flblue_incomplete" ? "#FF7866" : "#4D1F3B"}` }}>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-xs font-bold" style={{ color: "#FF7866" }}>FL Blue Incomplete</span>
+                            <span className="text-xl font-black" style={{ color: "#FF7866" }}>{prodStats.certBelow100}</span>
+                          </div>
+                          <div className="text-xs" style={{ color: "#5c3d7a" }}>Cert below 100% — FL Blue likely not done.</div>
+                        </button>
+                        <button onClick={() => setFilter(filter === "prod_flblue_75" ? "all" : "prod_flblue_75")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "prod_flblue_75" ? "#FFE56622" : "#FFE56611", border: `1px solid ${filter === "prod_flblue_75" ? "#FFE566" : "#3d2057"}` }}>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-xs font-bold" style={{ color: "#FFE566" }}>Missing FL Blue Only</span>
+                            <span className="text-xl font-black" style={{ color: "#FFE566" }}>{prodStats.at75}</span>
+                          </div>
+                          <div className="text-xs" style={{ color: "#5c3d7a" }}>Cert at 75% — 3/4 courses done, only FL Blue missing.</div>
+                        </button>
+                      </div>
+                      {/* Progress bar */}
+                      <div className="flex items-center gap-3 mt-2">
+                        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: "#3d2057" }}>
+                          <div className="h-full rounded-full" style={{ width: `${Math.round(prodStats.certComplete / prodStats.total * 100)}%`, background: "#4ade80" }} />
+                        </div>
+                        <span className="text-xs font-bold" style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>{Math.round(prodStats.certComplete / prodStats.total * 100)}%</span>
+                      </div>
+                    </div>
+                  )}
+                  {/* Pipeline agents */}
+                  <div>
+                    <div className="text-xs font-semibold mb-2" style={{ color: "#7a5f9a" }}>Pipeline Agents ({stats.total})</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => setFilter(filter === "flblue_done" ? "all" : "flblue_done")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "flblue_done" ? "#1a4d2e44" : "#1a4d2e22", border: `1px solid ${filter === "flblue_done" ? "#4ade80" : "#1a4d2e"}` }}>
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-xs font-bold" style={{ color: "#4ade80" }}>FL Blue Done</span>
+                          <span className="text-xl font-black" style={{ color: "#4ade80" }}>{stats.flBlueDone}</span>
+                        </div>
+                        <div className="text-xs" style={{ color: "#5c3d7a" }}>FL Blue uptraining completed.</div>
+                      </button>
+                      <button onClick={() => setFilter(filter === "flblue_incomplete" ? "all" : "flblue_incomplete")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "flblue_incomplete" ? "#FF786622" : "#FF786611", border: `1px solid ${filter === "flblue_incomplete" ? "#FF7866" : "#4D1F3B"}` }}>
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-xs font-bold" style={{ color: "#FF7866" }}>FL Blue Incomplete</span>
+                          <span className="text-xl font-black" style={{ color: "#FF7866" }}>{stats.flBlueIncomplete}</span>
+                        </div>
+                        <div className="text-xs" style={{ color: "#5c3d7a" }}>FL Blue not yet completed.</div>
+                      </button>
                     </div>
                   </div>
-                  <div className="grid grid-cols-4 gap-3">
-                    <button onClick={() => setFilter(filter === "waiting_creds" ? "all" : "waiting_creds")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "waiting_creds" ? "#794EC244" : "#794EC222", border: `1px solid ${filter === "waiting_creds" ? "#8F68D3" : "#794EC2"}` }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#8F68D3" }}>Ready for Credentials</span>
-                        <span className="text-2xl font-black" style={{ color: "#E8DFF6" }}>{stats.waitingForCreds}</span>
-                      </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>Courses done + BG cleared + not in Litmos. Credential these agents next.</div>
-                    </button>
-                    <button onClick={() => setFilter(filter === "creds_no_courses" ? "all" : "creds_no_courses")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "creds_no_courses" ? "#3d205744" : "#3d205722", border: `1px solid ${filter === "creds_no_courses" ? "#b8a5d4" : "#3d2057"}` }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#b8a5d4" }}>Courses Incomplete</span>
-                        <span className="text-2xl font-black" style={{ color: "#b8a5d4" }}>{stats.credsRequestedNoCourses}</span>
-                      </div>
-                      <div className="text-xs" style={{ color: "#5c3d7a" }}>Status says "Creds Requested" but NB Cert + FL Blue not done. Status advanced early.</div>
-                    </button>
-                    <button onClick={() => setFilter(filter === "stale_true" ? "all" : "stale_true")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "stale_true" ? "#4D1F3B44" : "#4D1F3B22", border: `1px solid ${filter === "stale_true" ? "#FF7866" : "#4D1F3B"}` }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Stale 3+ Weeks</span>
-                        <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.trulyStale}</span>
-                      </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>Ready for 3+ weeks but still not credentialed. Needs manual investigation.</div>
-                    </button>
-                    <button onClick={() => setFilter(filter === "stale_queue" ? "all" : "stale_queue")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "stale_queue" ? "#3d205744" : "#3d205722", border: `1px solid ${filter === "stale_queue" ? "#b8a5d4" : "#3d2057"}` }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#b8a5d4" }}>Stale — In Queue</span>
-                        <span className="text-2xl font-black" style={{ color: "#b8a5d4" }}>{stats.staleInQueue}</span>
-                      </div>
-                      <div className="text-xs" style={{ color: "#5c3d7a" }}>Creds requested 3+ weeks ago. Check if batch was processed.</div>
-                    </button>
-                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
+            {/* === SECTION: Pipeline Health === */}
+            <div className="mb-3 rounded-xl overflow-hidden" style={{ border: "1px solid #3d2057" }}>
+              <button onClick={() => toggleSection("health")} className="w-full flex items-center justify-between px-4 py-2.5 transition-all hover:brightness-110" style={{ background: "#1a0d2e" }}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs" style={{ color: "#7a5f9a" }}>{openSections.has("health") ? "▾" : "▸"}</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Pipeline Health</span>
+                </div>
+                <div className="text-xs" style={{ color: stats.ghosts + stats.accountIssues + stats.staleBgMismatch > 0 ? "#FF7866" : "#5c3d7a" }}>
+                  {stats.ghosts + stats.accountIssues + stats.staleBgMismatch} issues
+                </div>
+              </button>
+              {openSections.has("health") && (
+                <div className="px-4 py-3 grid grid-cols-3 gap-2" style={{ background: "#27133A" }}>
+                  <button onClick={() => setFilter(filter === "ghosts" ? "all" : "ghosts")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "ghosts" ? "#3d152544" : "#3d152522", border: `1px solid ${filter === "ghosts" ? "#FF7866" : "#4D1F3B"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#FF7866" }}>Nesting — No Creds</span>
+                      <span className="text-xl font-black" style={{ color: "#FF7866" }}>{stats.ghosts}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>In Nesting but no Litmos account.</div>
+                  </button>
+                  <button onClick={() => setFilter(filter === "account_issues" ? "all" : "account_issues")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "account_issues" ? "#4D1F3B44" : "#4D1F3B22", border: `1px solid ${filter === "account_issues" ? "#FFE566" : "#4D1F3B"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#FFE566" }}>BG Blocked</span>
+                      <span className="text-xl font-black" style={{ color: "#FFE566" }}>{stats.accountIssues}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>BG pending or created — blocked.</div>
+                  </button>
+                  <button onClick={() => setFilter(filter === "stale_bg" ? "all" : "stale_bg")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "stale_bg" ? "#FFE56630" : "#FFE56615", border: `1px solid ${filter === "stale_bg" ? "#FFE566" : "#FFE56666"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#FFE566" }}>BG Mismatch</span>
+                      <span className="text-xl font-black" style={{ color: "#FFE566" }}>{stats.staleBgMismatch}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>Roster ≠ CIP. Flag to Product.</div>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* === SECTION: Credential Pipeline === */}
+            <div className="mb-3 rounded-xl overflow-hidden" style={{ border: "1px solid #3d2057" }}>
+              <button onClick={() => toggleSection("creds")} className="w-full flex items-center justify-between px-4 py-2.5 transition-all hover:brightness-110" style={{ background: "#1a0d2e" }}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs" style={{ color: "#7a5f9a" }}>{openSections.has("creds") ? "▾" : "▸"}</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Credential Pipeline</span>
+                </div>
+                <div className="text-xs flex items-center gap-3" style={{ color: "#5c3d7a" }}>
+                  <span>{stats.waitingForCreds} ready</span>
+                  <span>•</span>
+                  <span>{stats.credsRequestedTotal} requested</span>
+                  <span>•</span>
+                  <span>{stats.alreadyCredentialed} credentialed</span>
+                </div>
+              </button>
+              {openSections.has("creds") && (
+                <div className="px-4 py-3 grid grid-cols-4 gap-2" style={{ background: "#27133A" }}>
+                  <button onClick={() => setFilter(filter === "waiting_creds" ? "all" : "waiting_creds")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "waiting_creds" ? "#794EC244" : "#794EC222", border: `1px solid ${filter === "waiting_creds" ? "#8F68D3" : "#794EC2"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#8F68D3" }}>Ready</span>
+                      <span className="text-xl font-black" style={{ color: "#E8DFF6" }}>{stats.waitingForCreds}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>Courses + BG done. Credential next.</div>
+                  </button>
+                  <button onClick={() => setFilter(filter === "creds_no_courses" ? "all" : "creds_no_courses")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "creds_no_courses" ? "#3d205744" : "#3d205722", border: `1px solid ${filter === "creds_no_courses" ? "#b8a5d4" : "#3d2057"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#b8a5d4" }}>Courses Incomplete</span>
+                      <span className="text-xl font-black" style={{ color: "#b8a5d4" }}>{stats.credsRequestedNoCourses}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>Creds requested but courses not done.</div>
+                  </button>
+                  <button onClick={() => setFilter(filter === "stale_true" ? "all" : "stale_true")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "stale_true" ? "#4D1F3B44" : "#4D1F3B22", border: `1px solid ${filter === "stale_true" ? "#FF7866" : "#4D1F3B"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#FF7866" }}>Stale 3+ Weeks</span>
+                      <span className="text-xl font-black" style={{ color: "#FF7866" }}>{stats.trulyStale}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>Ready but not credentialed. Investigate.</div>
+                  </button>
+                  <button onClick={() => setFilter(filter === "stale_queue" ? "all" : "stale_queue")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "stale_queue" ? "#3d205744" : "#3d205722", border: `1px solid ${filter === "stale_queue" ? "#b8a5d4" : "#3d2057"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#b8a5d4" }}>In Queue</span>
+                      <span className="text-xl font-black" style={{ color: "#b8a5d4" }}>{stats.staleInQueue}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>Requested 3+ weeks. Check batch.</div>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* === SEARCH + FILTERS === */}
             <div className="flex items-center gap-3 mb-3">
               <input type="text" placeholder="Search by name, ID, or email..."
                 value={search} onChange={e => setSearch(e.target.value)}
                 className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
                 style={{ background: "#1a0d2e", border: "1px solid #3d2057", color: "#E8DFF6" }} />
-              <div className="flex gap-1">
+              <div className="flex gap-1 flex-wrap">
                 {[
                   { key: "all", label: "All" },
                   { key: "ready", label: "Ready" },
-                  { key: "litmos_done", label: "Litmos ✓" },
-                  { key: "shyftoff_done", label: "ShyftOff ✓" },
                   { key: "partial", label: "In Progress" },
                   { key: "missing", label: "Not Started" },
-                  { key: "ghosts", label: "Ghosts" },
-                  { key: "waiting_creds", label: "Waiting Creds" },
-                  { key: "account_issues", label: "BG Issues" },
+                  { key: "production", label: "Production" },
                 ].map(f => (
                   <button key={f.key} onClick={() => setFilter(f.key)}
                     className="px-3 py-1.5 rounded-md text-xs font-semibold transition-all"
@@ -968,7 +1096,7 @@ export default function ProductionReadinessChecker() {
                       <th className="text-left px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Agent</th>
                       <th className="text-left px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>CIP Status</th>
                       <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Litmos</th>
-                      {activeTab === "details" && SHORT_LITMOS.map((s, i) => (
+                      {showDetailCols && SHORT_LITMOS.map((s, i) => (
                         <th key={i} className="text-center px-1 py-2.5 font-semibold text-xs" style={{ color: "#5c3d7a", maxWidth: 40 }} title={REQUIRED_LITMOS[i]}>{s}</th>
                       ))}
                       <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>ShyftOff Cert</th>
@@ -980,15 +1108,16 @@ export default function ProductionReadinessChecker() {
                     {filtered.length === 0 ? (
                       <tr><td colSpan={99} className="text-center py-8" style={{ color: "#5c3d7a" }}>No agents match current filters</td></tr>
                     ) : filtered.map((a, idx) => (
-                      <tr key={a.key + idx}
+                      <tr key={(a.key || a.sid) + idx}
                         className="cursor-pointer transition-all group"
                         style={{ background: idx % 2 === 0 ? "#27133A" : "#1a0d2e", borderBottom: "1px solid #1a0d2e" }}
-                        onClick={() => setExpandedRow(expandedRow === idx ? null : idx)}
+                        onClick={() => !a.isProd && setExpandedRow(expandedRow === idx ? null : idx)}
                         onMouseEnter={e => e.currentTarget.style.background = "#3d2057"}
                         onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? "#27133A" : "#1a0d2e"}>
                         <td className="px-3 py-2.5">
                           <div className="flex items-center gap-2">
                             <div className="font-semibold">{a.name}</div>
+                            {a.isProd && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#794EC2", color: "#E8DFF6", fontSize: 10 }}>PROD</span>}
                             <button
                               onClick={(e) => handleCopyAgent(a, idx, e)}
                               className="opacity-0 group-hover:opacity-100 transition-opacity px-1.5 py-0.5 rounded text-xs"
@@ -999,6 +1128,7 @@ export default function ProductionReadinessChecker() {
                             </button>
                           </div>
                           <div className="text-xs" style={{ color: "#7a5f9a", fontFamily: "'IBM Plex Mono', monospace" }}>{a.sid}</div>
+                          {!a.isProd && (
                           <div className="flex gap-1 mt-0.5 flex-wrap">
                             {a.isGhost && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d1525", color: "#FF7866", fontSize: 10 }}>NOT IN LITMOS</span>}
                             {a.hasAccountIssue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FFE566", fontSize: 10 }}>BG: {a.bgStatus}</span>}
@@ -1007,20 +1137,32 @@ export default function ProductionReadinessChecker() {
                             {a.isBgMismatch && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d3000", color: "#FFE566", fontSize: 10 }}>BG MISMATCH{a.daysSinceChange !== null ? ` ${a.daysSinceChange}d` : ""}</span>}
                             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
                           </div>
+                          )}
+                          {a.isProd && a.flBlueLikelyMissing && (
+                            <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d3000", color: "#FFE566", fontSize: 10 }}>FL BLUE INCOMPLETE</span>
+                          )}
                         </td>
                         <td className="px-3 py-2.5 text-xs" style={{ color: "#b8a5d4" }}>{a.status}</td>
                         <td className="px-3 py-2.5 text-center">
+                          {a.isProd ? (
+                            <span className="text-xs" style={{ color: "#5c3d7a" }}>—</span>
+                          ) : (
                           <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.allLitmos ? "#4ade80" : a.litmosCount > 0 ? "#FFE566" : "#FF7866" }}>
                             {a.litmosCount}/14
                           </span>
+                          )}
                         </td>
-                        {activeTab === "details" && a.litmosDone.map((c, ci) => (
+                        {showDetailCols && a.litmosDone.map((c, ci) => (
                           <td key={ci} className="px-1 py-2.5 text-center">
                             <CourseDot done={c.completed} title={c.name} />
                           </td>
                         ))}
                         <td className="px-3 py-2.5 text-center">
-                          {a.shyftoffPct !== null ? (
+                          {a.isProd ? (
+                            <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.certPct === 100 ? "#4ade80" : a.certPct >= 75 ? "#FFE566" : "#FF7866" }}>
+                              {a.certPct !== null ? `${a.certPct}%` : "N/A"}
+                            </span>
+                          ) : a.shyftoffPct !== null ? (
                             <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.shyftoffComplete ? "#4ade80" : a.shyftoffPct > 0 ? "#FFE566" : "#FF7866" }}>
                               {a.shyftoffPct}%
                             </span>
@@ -1029,14 +1171,19 @@ export default function ProductionReadinessChecker() {
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-center">
-                          {!a.navAvailable
+                          {a.isProd
+                            ? <span className="text-xs" style={{ color: "#5c3d7a" }}>—</span>
+                            : !a.navAvailable
                             ? <span className="text-xs" style={{ color: "#5c3d7a" }}>N/A</span>
                             : a.navAttended
                               ? <span style={{ color: "#4ade80" }}>✓</span>
                               : <span style={{ color: "#FF7866" }}>✗</span>
                           }
                         </td>
-                        <td className="px-3 py-2.5 text-center"><Badge type={a.readyStatus} /></td>
+                        <td className="px-3 py-2.5 text-center">{a.isProd
+                          ? <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: a.certPct === 100 ? "#1a4d2e" : "#4D1F3B", color: a.certPct === 100 ? "#4ade80" : "#FFE566" }}>{a.certPct === 100 ? "COMPLETE" : "FL BLUE NEEDED"}</span>
+                          : <Badge type={a.readyStatus} />
+                        }</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1045,7 +1192,7 @@ export default function ProductionReadinessChecker() {
             </div>
 
             <div className="mt-3 text-xs text-center" style={{ color: "#4D1F3B" }}>
-              Showing {filtered.length} of {results.length} agents • Click any row for details
+              Showing {filtered.length} {filtered.length > 0 && filtered[0].isProd ? "production" : "pipeline"} agents • {filtered.length > 0 && !filtered[0].isProd ? "Click any row for details" : ""}
             </div>
           </>
         )}
