@@ -422,8 +422,11 @@ export default function ProductionReadinessChecker() {
       const createdAt = row.created_at ? new Date(row.created_at) : null;
       const lastChanged = row.last_changed || row.status_updated_at || "";
       const changedAt = lastChanged ? new Date(lastChanged) : null;
-      const isNesting = status.toLowerCase().includes("nesting");
-      const isRoster = status.toLowerCase().includes("roster");
+      const statusLower = status.toLowerCase();
+      const isNesting = statusLower.includes("nesting");
+      const isRoster = statusLower.includes("roster");
+      const isCredentialsRequested = statusLower.includes("credentials requested");
+      const shyftoffStaleLevel = (row.stale_level || "").trim();
 
       // Days since status last changed
       const now = new Date();
@@ -438,6 +441,9 @@ export default function ProductionReadinessChecker() {
       // Waiting for creds = Roster courses done (NB Cert + FL Blue), BG cleared, not yet credentialed
       const isWaitingForCreds = !inLitmos && bgCleared && rosterCoursesDone;
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
+      // Split stale into: in credentials queue vs truly stale
+      const isStaleInQueue = isStaleWaiter && isCredentialsRequested;
+      const isTrulyStale = isStaleWaiter && !isCredentialsRequested;
       const hasAccountIssue = !bgCleared && bgStatus !== "";
 
       const allLitmos = litmosCount === 14;
@@ -469,8 +475,8 @@ export default function ProductionReadinessChecker() {
         daysSinceChange, daysSinceCreated,
         createdAtRaw: row.created_at || "",
         lastChangedRaw: lastChanged,
-        isNesting, isRoster,
-        isGhost, isWaitingForCreds, isStaleWaiter, hasAccountIssue,
+        isNesting, isRoster, isCredentialsRequested, shyftoffStaleLevel,
+        isGhost, isWaitingForCreds, isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
         credentialNote,
       });
     });
@@ -489,6 +495,8 @@ export default function ProductionReadinessChecker() {
     if (filter === "ghosts") out = out.filter(a => a.isGhost);
     if (filter === "waiting_creds") out = out.filter(a => a.isWaitingForCreds);
     if (filter === "stale") out = out.filter(a => a.isStaleWaiter);
+    if (filter === "stale_queue") out = out.filter(a => a.isStaleInQueue);
+    if (filter === "stale_true") out = out.filter(a => a.isTrulyStale);
     if (filter === "account_issues") out = out.filter(a => a.hasAccountIssue);
     if (search) {
       const s = search.toLowerCase();
@@ -509,6 +517,8 @@ export default function ProductionReadinessChecker() {
       ghosts: results.filter(a => a.isGhost).length,
       waitingForCreds: results.filter(a => a.isWaitingForCreds).length,
       staleWaiters: results.filter(a => a.isStaleWaiter).length,
+      staleInQueue: results.filter(a => a.isStaleInQueue).length,
+      trulyStale: results.filter(a => a.isTrulyStale).length,
       accountIssues: results.filter(a => a.hasAccountIssue).length,
     };
   }, [results]);
@@ -550,7 +560,8 @@ export default function ProductionReadinessChecker() {
     const readyNames = results.filter(a => a.readyStatus === "ready").map(a => a.name);
     const waitingNames = results.filter(a => a.isWaitingForCreds).map(a => a.name);
     const ghostNames = results.filter(a => a.isGhost).map(a => a.name);
-    const staleNames = results.filter(a => a.isStaleWaiter).map(a => a.name);
+    const staleQueueNames = results.filter(a => a.isStaleInQueue).map(a => a.name);
+    const trulyStaleNames = results.filter(a => a.isTrulyStale).map(a => a.name);
 
     let body = `Hi Jayden,\n\nHere is the NationsBenefits pipeline readiness summary as of ${today}.\n`;
     body += `\nPIPELINE OVERVIEW\n`;
@@ -573,11 +584,17 @@ export default function ProductionReadinessChecker() {
       waitingNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
       if (waitingNames.length > 10) body += `• ...and ${waitingNames.length - 10} more\n`;
     }
-    if (staleNames.length > 0) {
-      body += `\nStale — Waiting 3+ Weeks (${staleNames.length}):\n`;
-      body += `These agents likely have account issues that need manual investigation.\n`;
-      staleNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
-      if (staleNames.length > 10) body += `• ...and ${staleNames.length - 10} more\n`;
+    if (staleQueueNames.length > 0) {
+      body += `\nCredentials In Queue — 3+ Weeks (${staleQueueNames.length}):\n`;
+      body += `Credentials were requested but not yet processed — check if the batch was sent.\n`;
+      staleQueueNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
+      if (staleQueueNames.length > 10) body += `• ...and ${staleQueueNames.length - 10} more\n`;
+    }
+    if (trulyStaleNames.length > 0) {
+      body += `\nTruly Stale — 3+ Weeks (${trulyStaleNames.length}):\n`;
+      body += `Waiting 3+ weeks with no credentials request — needs manual investigation.\n`;
+      trulyStaleNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
+      if (trulyStaleNames.length > 10) body += `• ...and ${trulyStaleNames.length - 10} more\n`;
     }
     if (stats.ghosts > 0) {
       body += `\nNesting Without Credentials (${stats.ghosts}):\n`;
@@ -714,13 +731,22 @@ export default function ProductionReadinessChecker() {
                         Roster courses (NB Cert + FL Blue) complete + BG cleared but not in Litmos — should be on the credentials list.
                       </div>
                     </button>
-                    <button onClick={() => { setFilter("stale"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#4D1F3B22", border: "1px solid #4D1F3B" }}>
+                    <button onClick={() => { setFilter("stale_queue"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#794EC215", border: "1px solid #794EC2" }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Stale (3+ Weeks)</span>
-                        <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.staleWaiters}</span>
+                        <span className="text-sm font-bold" style={{ color: "#8F68D3" }}>Credentials In Queue</span>
+                        <span className="text-2xl font-black" style={{ color: "#E8DFF6" }}>{stats.staleInQueue}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Roster courses done + BG cleared but still not credentialed after 3+ weeks — likely an account issue.
+                        Credentials requested 3+ weeks ago but not yet processed — in the batch queue. Check if the batch was sent.
+                      </div>
+                    </button>
+                    <button onClick={() => { setFilter("stale_true"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#4D1F3B22", border: "1px solid #4D1F3B" }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Truly Stale (3+ Weeks)</span>
+                        <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.trulyStale}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
+                        Waiting 3+ weeks with no credentials request — needs manual investigation.
                       </div>
                     </button>
                   </div>
@@ -796,7 +822,8 @@ export default function ProductionReadinessChecker() {
                           <div className="flex gap-1 mt-0.5 flex-wrap">
                             {a.isGhost && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d1525", color: "#FF7866", fontSize: 10 }}>NOT IN LITMOS</span>}
                             {a.hasAccountIssue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FFE566", fontSize: 10 }}>BG: {a.bgStatus}</span>}
-                            {a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FF7866", fontSize: 10 }}>STALE {a.daysSinceChange}d</span>}
+                            {a.isTrulyStale && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FF7866", fontSize: 10 }}>STALE {a.daysSinceChange}d</span>}
+                            {a.isStaleInQueue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#8F68D3", fontSize: 10 }}>IN QUEUE {a.daysSinceChange}d</span>}
                             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
                           </div>
                         </td>
@@ -1056,9 +1083,19 @@ export default function ProductionReadinessChecker() {
                       In Nesting without credentials — shouldn't be in this status
                     </div>
                   )}
-                  {ag.isStaleWaiter && (
+                  {ag.isStaleInQueue && (
+                    <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#794EC222", border: "1px solid #794EC2", color: "#8F68D3" }}>
+                      Credentials were requested — in batch queue for {ag.daysSinceChange}d. Check if the batch has been processed.
+                    </div>
+                  )}
+                  {ag.isTrulyStale && (
                     <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B", color: "#FF7866" }}>
-                      Waiting {ag.daysSinceChange}+ days for credentials — likely account issue
+                      Waiting {ag.daysSinceChange}+ days with no credentials request — needs manual investigation.
+                    </div>
+                  )}
+                  {ag.shyftoffStaleLevel && (
+                    <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#3d205722", border: "1px solid #3d2057", color: "#b8a5d4" }}>
+                      ShyftOff flagged: {ag.shyftoffStaleLevel}
                     </div>
                   )}
                   {ag.hasAccountIssue && (
