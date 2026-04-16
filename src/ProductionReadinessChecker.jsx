@@ -483,17 +483,18 @@ export default function ProductionReadinessChecker() {
       const isGhost = isNesting && !inLitmos;
       // Missing CCAAS = needs ccaas_id assigned before moving to production
       const missingCcaas = !hasCcaas;
-      // BG mismatch: BG is effectively cleared (report=clear or simple=cleared)
-      // but the CIP process_status hasn't caught up (still IN_PROGRESS)
-      const isBgMismatch = bgCleared && cipBgProcess === "IN_PROGRESS" && cipBgProcess !== "" ;
+      // BG mismatch: status says "Credentials Requested" (system thinks agent is ready)
+      // but BG check is NOT actually cleared (process IN_PROGRESS, report pending/processing)
+      // This is a systemic backend issue — the agent was moved to creds-requested prematurely
+      const isBgMismatch = isCredentialsRequested && !bgCleared && (cipBgProcess === "IN_PROGRESS" || cipBgProcess === "" || cipBgProcess === "null");
       // Waiting for creds = Roster courses done (NB Cert + FL Blue), BG cleared, not yet credentialed
       const isWaitingForCreds = !inLitmos && bgCleared && rosterCoursesDone;
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
-      // Split stale into 3 sub-groups
-      const isStaleBgMismatch = isStaleWaiter && isBgMismatch;
-      const isStaleInQueue = isStaleWaiter && !isBgMismatch && isCredentialsRequested;
-      const isTrulyStale = isStaleWaiter && !isBgMismatch && !isCredentialsRequested;
-      const hasAccountIssue = !bgCleared && bgStatus !== "";
+      // Split stale into: in credentials queue vs truly stale (only agents with cleared BG)
+      const isStaleInQueue = isStaleWaiter && isCredentialsRequested;
+      const isTrulyStale = isStaleWaiter && !isCredentialsRequested;
+      // Account issue = BG not cleared, but NOT a known mismatch (those get their own category)
+      const hasAccountIssue = !bgCleared && bgStatus !== "" && !isBgMismatch;
 
       const allLitmos = litmosCount === 14;
       const navMet = navAttended || !(navData && navData.length > 0);
@@ -504,6 +505,7 @@ export default function ProductionReadinessChecker() {
       // Key trigger: Roster courses (NB Cert + FL Blue) done + BG cleared = credentials eligible
       let credentialNote = "";
       if (inLitmos) credentialNote = "Has credentials";
+      else if (isBgMismatch) credentialNote = "BG mismatch — credentials requested but BG not cleared";
       else if (rosterCoursesDone && bgCleared) credentialNote = "Should be on next credentials batch";
       else if (rosterCoursesDone && !bgCleared) credentialNote = "Roster courses done — waiting on BG check";
       else if (nbCertDone && !flBlueDone && bgCleared) credentialNote = "BG cleared — FL Blue uptraining in progress";
@@ -526,7 +528,7 @@ export default function ProductionReadinessChecker() {
         lastChangedRaw: lastChanged,
         isNesting, isRoster, isCredentialsRequested, shyftoffStaleLevel,
         cipBgProcess, cipBgReport, isBgMismatch,
-        isGhost, isWaitingForCreds, isStaleWaiter, isStaleInQueue, isTrulyStale, isStaleBgMismatch, hasAccountIssue,
+        isGhost, isWaitingForCreds, isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
         credentialNote,
       });
     });
@@ -547,7 +549,7 @@ export default function ProductionReadinessChecker() {
     if (filter === "stale") out = out.filter(a => a.isStaleWaiter);
     if (filter === "stale_queue") out = out.filter(a => a.isStaleInQueue);
     if (filter === "stale_true") out = out.filter(a => a.isTrulyStale);
-    if (filter === "stale_bg") out = out.filter(a => a.isStaleBgMismatch);
+    if (filter === "stale_bg") out = out.filter(a => a.isBgMismatch);
     if (filter === "account_issues") out = out.filter(a => a.hasAccountIssue);
     if (search) {
       const s = search.toLowerCase();
@@ -570,7 +572,7 @@ export default function ProductionReadinessChecker() {
       staleWaiters: results.filter(a => a.isStaleWaiter).length,
       staleInQueue: results.filter(a => a.isStaleInQueue).length,
       trulyStale: results.filter(a => a.isTrulyStale).length,
-      staleBgMismatch: results.filter(a => a.isStaleBgMismatch).length,
+      staleBgMismatch: results.filter(a => a.isBgMismatch).length,
       accountIssues: results.filter(a => a.hasAccountIssue).length,
     };
   }, [results]);
@@ -614,7 +616,7 @@ export default function ProductionReadinessChecker() {
     const ghostNames = results.filter(a => a.isGhost).map(a => a.name);
     const staleQueueNames = results.filter(a => a.isStaleInQueue).map(a => a.name);
     const trulyStaleNames = results.filter(a => a.isTrulyStale).map(a => a.name);
-    const bgMismatchNames = results.filter(a => a.isStaleBgMismatch).map(a => a.name);
+    const bgMismatchNames = results.filter(a => a.isBgMismatch).map(a => a.name);
 
     let body = `Hi Jayden,\n\nHere is the NationsBenefits pipeline readiness summary as of ${today}.\n`;
     body += `\nPIPELINE OVERVIEW\n`;
@@ -651,7 +653,7 @@ export default function ProductionReadinessChecker() {
     }
     if (bgMismatchNames.length > 0) {
       body += `\nBG Check Mismatch (${bgMismatchNames.length}):\n`;
-      body += `Roster/Nesting shows BG cleared but CIP export shows In Progress — systemic backend issue.\n`;
+      body += `Status shows "Credentials Requested" but BG check not cleared — systemic backend mismatch.\n`;
       bgMismatchNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
       if (bgMismatchNames.length > 10) body += `• ...and ${bgMismatchNames.length - 10} more\n`;
     }
@@ -815,7 +817,7 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.staleBgMismatch}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Roster/Nesting shows BG cleared but CIP export shows In Progress — systemic backend issue, not truly stale.
+                        Status shows "Credentials Requested" but BG check not cleared — moved to creds-requested prematurely.
                       </div>
                     </button>
                     )}
@@ -894,7 +896,7 @@ export default function ProductionReadinessChecker() {
                             {a.hasAccountIssue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FFE566", fontSize: 10 }}>BG: {a.bgStatus}</span>}
                             {a.isTrulyStale && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FF7866", fontSize: 10 }}>STALE {a.daysSinceChange}d</span>}
                             {a.isStaleInQueue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#8F68D3", fontSize: 10 }}>IN QUEUE {a.daysSinceChange}d</span>}
-                            {a.isStaleBgMismatch && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d3000", color: "#FFE566", fontSize: 10 }}>BG MISMATCH {a.daysSinceChange}d</span>}
+                            {a.isBgMismatch && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d3000", color: "#FFE566", fontSize: 10 }}>BG MISMATCH{a.daysSinceChange !== null ? ` ${a.daysSinceChange}d` : ""}</span>}
                             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
                           </div>
                         </td>
@@ -1146,7 +1148,7 @@ export default function ProductionReadinessChecker() {
               </div>
 
               {/* Anomaly alerts */}
-              {(ag.isGhost || ag.isStaleWaiter || ag.hasAccountIssue) && (
+              {(ag.isGhost || ag.isStaleWaiter || ag.isBgMismatch || ag.hasAccountIssue) && (
                 <div className="px-4 py-3 space-y-1.5">
                   <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Alerts</div>
                   {ag.isGhost && (
@@ -1164,9 +1166,9 @@ export default function ProductionReadinessChecker() {
                       Waiting {ag.daysSinceChange}+ days with no credentials request — needs manual investigation.
                     </div>
                   )}
-                  {ag.isStaleBgMismatch && (
+                  {ag.isBgMismatch && (
                     <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#FFE56615", border: "1px solid #FFE566", color: "#FFE566" }}>
-                      BG Check Mismatch: Roster/Nesting shows "cleared" but CIP export shows process_status: "{ag.cipBgProcess}", report_status: "{ag.cipBgReport}" — systemic backend issue.
+                      BG Mismatch: Status is "Credentials Requested" but BG not cleared — process: {ag.cipBgProcess || "unknown"}, report: {ag.cipBgReport || "unknown"}. Agent was moved to creds-requested prematurely.
                     </div>
                   )}
                   {ag.shyftoffStaleLevel && (
