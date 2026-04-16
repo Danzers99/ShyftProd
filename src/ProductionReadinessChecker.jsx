@@ -792,14 +792,13 @@ export default function ProductionReadinessChecker() {
     if (prodStats) {
       const pct = Math.round(prodStats.certComplete / prodStats.total * 100);
       text += `PRODUCTION AGENTS (${prodStats.total})\n`;
-      text += `• FL Blue Complete (cert 100%): ${prodStats.certComplete} (${pct}%)\n`;
-      text += `• FL Blue Incomplete (cert < 100%): ${prodStats.certBelow100}\n`;
-      text += `• Missing FL Blue Only (cert 75%): ${prodStats.at75}\n\n`;
+      text += `• Done: ${prodStats.certComplete} (${pct}%)\n`;
+      text += `• Not Done: ${prodStats.certBelow100}\n\n`;
     }
     if (stats) {
       text += `PIPELINE AGENTS (${stats.total})\n`;
-      text += `• FL Blue Done: ${stats.flBlueDone}\n`;
-      text += `• FL Blue Incomplete: ${stats.flBlueIncomplete}\n`;
+      text += `• Done: ${stats.flBlueDone}\n`;
+      text += `• Not Done: ${stats.flBlueIncomplete}\n`;
     }
     return text;
   }, [prodStats, stats]);
@@ -966,31 +965,24 @@ export default function ProductionReadinessChecker() {
               </button>
               {openSections.has("flblue") && (
                 <div className="px-4 py-3" style={{ background: "#27133A" }}>
-                  {/* Production agents */}
+                  {/* Production agents — Done vs Not Done */}
                   {prodStats && (
                     <div className="mb-3">
                       <div className="text-xs font-semibold mb-2" style={{ color: "#7a5f9a" }}>Production Agents ({prodStats.total})</div>
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-2 gap-2">
                         <button onClick={() => setFilter(filter === "production" ? "all" : "production")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "production" ? "#1a4d2e44" : "#1a4d2e22", border: `1px solid ${filter === "production" ? "#4ade80" : "#1a4d2e"}` }}>
                           <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-xs font-bold" style={{ color: "#4ade80" }}>FL Blue Complete</span>
+                            <span className="text-xs font-bold" style={{ color: "#4ade80" }}>Done</span>
                             <span className="text-xl font-black" style={{ color: "#4ade80" }}>{prodStats.certComplete}</span>
                           </div>
-                          <div className="text-xs" style={{ color: "#5c3d7a" }}>Cert 100% — all courses including FL Blue done.</div>
+                          <div className="text-xs" style={{ color: "#5c3d7a" }}>All courses complete including FL Blue.</div>
                         </button>
                         <button onClick={() => setFilter(filter === "prod_flblue_incomplete" ? "all" : "prod_flblue_incomplete")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "prod_flblue_incomplete" ? "#FF786622" : "#FF786611", border: `1px solid ${filter === "prod_flblue_incomplete" ? "#FF7866" : "#4D1F3B"}` }}>
                           <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-xs font-bold" style={{ color: "#FF7866" }}>FL Blue Incomplete</span>
+                            <span className="text-xs font-bold" style={{ color: "#FF7866" }}>Not Done</span>
                             <span className="text-xl font-black" style={{ color: "#FF7866" }}>{prodStats.certBelow100}</span>
                           </div>
-                          <div className="text-xs" style={{ color: "#5c3d7a" }}>Cert below 100% — FL Blue likely not done.</div>
-                        </button>
-                        <button onClick={() => setFilter(filter === "prod_flblue_75" ? "all" : "prod_flblue_75")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "prod_flblue_75" ? "#FFE56622" : "#FFE56611", border: `1px solid ${filter === "prod_flblue_75" ? "#FFE566" : "#3d2057"}` }}>
-                          <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-xs font-bold" style={{ color: "#FFE566" }}>Missing FL Blue Only</span>
-                            <span className="text-xl font-black" style={{ color: "#FFE566" }}>{prodStats.at75}</span>
-                          </div>
-                          <div className="text-xs" style={{ color: "#5c3d7a" }}>Cert at 75% — 3/4 courses done, only FL Blue missing.</div>
+                          <div className="text-xs" style={{ color: "#5c3d7a" }}>Cert below 100% — FL Blue not completed yet.</div>
                         </button>
                       </div>
                       {/* Progress bar */}
@@ -1002,20 +994,20 @@ export default function ProductionReadinessChecker() {
                       </div>
                     </div>
                   )}
-                  {/* Pipeline agents */}
+                  {/* Pipeline agents — Done vs Not Done */}
                   <div>
                     <div className="text-xs font-semibold mb-2" style={{ color: "#7a5f9a" }}>Pipeline Agents ({stats.total})</div>
                     <div className="grid grid-cols-2 gap-2">
                       <button onClick={() => setFilter(filter === "flblue_done" ? "all" : "flblue_done")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "flblue_done" ? "#1a4d2e44" : "#1a4d2e22", border: `1px solid ${filter === "flblue_done" ? "#4ade80" : "#1a4d2e"}` }}>
                         <div className="flex items-center justify-between mb-0.5">
-                          <span className="text-xs font-bold" style={{ color: "#4ade80" }}>FL Blue Done</span>
+                          <span className="text-xs font-bold" style={{ color: "#4ade80" }}>Done</span>
                           <span className="text-xl font-black" style={{ color: "#4ade80" }}>{stats.flBlueDone}</span>
                         </div>
                         <div className="text-xs" style={{ color: "#5c3d7a" }}>FL Blue uptraining completed.</div>
                       </button>
                       <button onClick={() => setFilter(filter === "flblue_incomplete" ? "all" : "flblue_incomplete")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "flblue_incomplete" ? "#FF786622" : "#FF786611", border: `1px solid ${filter === "flblue_incomplete" ? "#FF7866" : "#4D1F3B"}` }}>
                         <div className="flex items-center justify-between mb-0.5">
-                          <span className="text-xs font-bold" style={{ color: "#FF7866" }}>FL Blue Incomplete</span>
+                          <span className="text-xs font-bold" style={{ color: "#FF7866" }}>Not Done</span>
                           <span className="text-xl font-black" style={{ color: "#FF7866" }}>{stats.flBlueIncomplete}</span>
                         </div>
                         <div className="text-xs" style={{ color: "#5c3d7a" }}>FL Blue not yet completed.</div>
