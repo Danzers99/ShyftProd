@@ -487,8 +487,15 @@ export default function ProductionReadinessChecker() {
       // but BG check is NOT actually cleared (process IN_PROGRESS, report pending/processing)
       // This is a systemic backend issue — the agent was moved to creds-requested prematurely
       const isBgMismatch = isCredentialsRequested && !bgCleared && (cipBgProcess === "IN_PROGRESS" || cipBgProcess === "" || cipBgProcess === "null");
-      // Waiting for creds = Roster courses done (NB Cert + FL Blue), BG cleared, not yet credentialed
+
+      // Credential pipeline flags (cross-referencing status + actual data)
+      // Ready for credentials = courses done + BG cleared + not yet credentialed (strict, data-driven)
       const isWaitingForCreds = !inLitmos && bgCleared && rosterCoursesDone;
+      // Creds requested but courses not done = system advanced them prematurely
+      const isCredsRequestedNoCourses = isCredentialsRequested && !rosterCoursesDone && !inLitmos;
+      // Creds requested, courses done, BG cleared, but already in Litmos = already credentialed
+      const isAlreadyCredentialed = isCredentialsRequested && inLitmos;
+
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
       // Split stale into: in credentials queue vs truly stale (only agents with cleared BG)
       const isStaleInQueue = isStaleWaiter && isCredentialsRequested;
@@ -528,7 +535,8 @@ export default function ProductionReadinessChecker() {
         lastChangedRaw: lastChanged,
         isNesting, isRoster, isCredentialsRequested, shyftoffStaleLevel,
         cipBgProcess, cipBgReport, isBgMismatch,
-        isGhost, isWaitingForCreds, isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
+        isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed,
+        isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
         credentialNote,
       });
     });
@@ -546,6 +554,7 @@ export default function ProductionReadinessChecker() {
     if (filter === "shyftoff_done") out = out.filter(a => a.shyftoffComplete);
     if (filter === "ghosts") out = out.filter(a => a.isGhost);
     if (filter === "waiting_creds") out = out.filter(a => a.isWaitingForCreds);
+    if (filter === "creds_no_courses") out = out.filter(a => a.isCredsRequestedNoCourses);
     if (filter === "stale") out = out.filter(a => a.isStaleWaiter);
     if (filter === "stale_queue") out = out.filter(a => a.isStaleInQueue);
     if (filter === "stale_true") out = out.filter(a => a.isTrulyStale);
@@ -569,6 +578,9 @@ export default function ProductionReadinessChecker() {
       navAvailable: results.length > 0 && results[0].navAvailable,
       ghosts: results.filter(a => a.isGhost).length,
       waitingForCreds: results.filter(a => a.isWaitingForCreds).length,
+      credsRequestedNoCourses: results.filter(a => a.isCredsRequestedNoCourses).length,
+      alreadyCredentialed: results.filter(a => a.isAlreadyCredentialed).length,
+      credsRequestedTotal: results.filter(a => a.isCredentialsRequested).length,
       staleWaiters: results.filter(a => a.isStaleWaiter).length,
       staleInQueue: results.filter(a => a.isStaleInQueue).length,
       trulyStale: results.filter(a => a.isTrulyStale).length,
@@ -781,35 +793,34 @@ export default function ProductionReadinessChecker() {
                   </div>
                 </div>
                 <div className="rounded-xl p-4" style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-                  <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "#7a5f9a" }}>Credential Queue</div>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#7a5f9a" }}>Credential Pipeline</div>
+                  {/* Pipeline summary bar */}
+                  <div className="text-xs mb-3 flex items-center gap-2" style={{ color: "#5c3d7a" }}>
+                    <span>{stats.credsRequestedTotal} with "Credentials Requested" status</span>
+                    <span>•</span>
+                    <span>{stats.alreadyCredentialed} already credentialed</span>
+                  </div>
                   <div className="space-y-3">
                     <button onClick={() => { setFilter("waiting_creds"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#794EC222", border: "1px solid #794EC2" }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#8F68D3" }}>Waiting for Credentials</span>
+                        <span className="text-sm font-bold" style={{ color: "#8F68D3" }}>Ready for Credentials</span>
                         <span className="text-2xl font-black" style={{ color: "#E8DFF6" }}>{stats.waitingForCreds}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Roster courses (NB Cert + FL Blue) complete + BG cleared but not in Litmos — should be on the credentials list.
+                        Courses done + BG cleared + not in Litmos — verified by cross-referencing actual data, not just status.
                       </div>
                     </button>
-                    <button onClick={() => { setFilter("stale_queue"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#794EC215", border: "1px solid #794EC2" }}>
+                    {stats.credsRequestedNoCourses > 0 && (
+                    <button onClick={() => { setFilter("creds_no_courses"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#3d205722", border: "1px solid #3d2057" }}>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#8F68D3" }}>Credentials In Queue</span>
-                        <span className="text-2xl font-black" style={{ color: "#E8DFF6" }}>{stats.staleInQueue}</span>
+                        <span className="text-sm font-bold" style={{ color: "#b8a5d4" }}>Creds Requested — Courses Not Done</span>
+                        <span className="text-2xl font-black" style={{ color: "#b8a5d4" }}>{stats.credsRequestedNoCourses}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Credentials requested 3+ weeks ago but not yet processed — in the batch queue. Check if the batch was sent.
-                      </div>
-                    </button>
-                    <button onClick={() => { setFilter("stale_true"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#4D1F3B22", border: "1px solid #4D1F3B" }}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Truly Stale (3+ Weeks)</span>
-                        <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.trulyStale}</span>
-                      </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Waiting 3+ weeks with no credentials request — needs manual investigation.
+                      <div className="text-xs" style={{ color: "#5c3d7a" }}>
+                        Status says "Credentials Requested" but roster courses (NB Cert + FL Blue) aren't actually complete. Status advanced prematurely.
                       </div>
                     </button>
+                    )}
                     {stats.staleBgMismatch > 0 && (
                     <button onClick={() => { setFilter("stale_bg"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#FFE56615", border: "1px solid #FFE566" }}>
                       <div className="flex items-center justify-between mb-1">
@@ -817,7 +828,18 @@ export default function ProductionReadinessChecker() {
                         <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.staleBgMismatch}</span>
                       </div>
                       <div className="text-xs" style={{ color: "#b8a5d4" }}>
-                        Status shows "Credentials Requested" but BG check not cleared — moved to creds-requested prematurely.
+                        Status says "Credentials Requested" but BG not cleared — moved to creds-requested prematurely.
+                      </div>
+                    </button>
+                    )}
+                    {stats.trulyStale > 0 && (
+                    <button onClick={() => { setFilter("stale_true"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#4D1F3B22", border: "1px solid #4D1F3B" }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Truly Stale (3+ Weeks)</span>
+                        <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.trulyStale}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
+                        Courses done + BG cleared but not credentialed after 3+ weeks — needs investigation.
                       </div>
                     </button>
                     )}
