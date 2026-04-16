@@ -837,7 +837,7 @@ export default function ProductionReadinessChecker() {
     const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
     let text = `FL Blue 2026 Uptraining Summary — ${today}\n\n`;
     if (prodStats) {
-      const pct = Math.round(prodStats.certComplete / prodStats.total * 100);
+      const pct = Math.round(prodStats.flBlueDone / prodStats.total * 100);
       text += `PRODUCTION AGENTS (${prodStats.total})\n`;
       if (prodStats.hasFlBlueData) {
         text += `• FL Blue Complete: ${prodStats.flBlueDone} (${pct}%)\n`;
