@@ -586,19 +586,64 @@ export default function ProductionReadinessChecker() {
   }, [litmosData, cipData, prodData, navData, peopleData]);
 
   // Process production agents for FL Blue tracking
+  // Production data can come in two formats:
+  // 1. production_agents CSV: aggregate cert % (integer), no per-course data
+  // 2. production-export CSV: JSON cert_progress with per-course data (same as CIP)
+  // Dedup by SID, prefer JSON format for FL Blue accuracy
   const prodAgents = useMemo(() => {
     if (!prodData || !prodData.length) return [];
-    return prodData.map(r => {
+    const seen = new Map();
+    prodData.forEach(r => {
+      const name = (r.full_name || r.agent_nm || r.agent_name || "").trim();
+      const sid = (r.so_agent_id || r.shyftoff_id || "").trim();
+      if (!sid) return;
+      const certRaw = (r.certification_progress || "").trim();
+      const isJson = certRaw.startsWith("[");
+      if (seen.has(sid)) {
+        const existing = seen.get(sid);
+        // Prefer JSON cert data over integer
+        if (isJson && !existing._isJson) {
+          existing.certification_progress = certRaw;
+          existing._isJson = true;
+        }
+        return;
+      }
+      seen.set(sid, { ...r, _isJson: isJson });
+    });
+
+    return [...seen.values()].map(r => {
       const name = (r.full_name || r.agent_nm || r.agent_name || "").trim();
       const sid = (r.so_agent_id || r.shyftoff_id || "").trim();
       const certRaw = (r.certification_progress || "").trim();
+
+      // Try JSON per-course data first (production-export format)
+      let flBlueDone = null; // null = no data, true/false = known
+      let flBluePct = null;
+      if (certRaw.startsWith("[")) {
+        try {
+          const arr = JSON.parse(certRaw.replace(/""/g, '"'));
+          for (const item of arr) {
+            if ((item.course_code || "").toLowerCase().includes("flblue")) {
+              const prog = parseFloat(item.progress) || 0;
+              flBluePct = Math.round(prog * 100);
+              flBlueDone = prog >= 1.0;
+              break;
+            }
+          }
+        } catch {}
+      }
+
+      // Fall back to aggregate integer
       const certPct = certRaw.match(/^\d+$/) ? parseInt(certRaw) : null;
+
       return {
-        name, sid, certPct, isProd: true,
-        // Production exports only have aggregate cert %. No per-course FL Blue data.
-        // cert=100% confirms all courses done. Anything else = no FL Blue data.
+        name, sid, isProd: true,
+        certPct: certPct !== null ? certPct : (flBlueDone !== null ? null : null),
+        flBlueDone, // true/false from per-course, or null if no data
+        flBluePct,
+        hasFlBlueData: flBlueDone !== null,
         allCoursesDone: certPct === 100,
-        status: r.agent_campaign_status || "Production",
+        status: r.agent_campaign_status || r.status || "Production",
         bgStatus: (r.background_check_status || "").trim().toLowerCase(),
       };
     });
@@ -606,10 +651,14 @@ export default function ProductionReadinessChecker() {
 
   const prodStats = useMemo(() => {
     if (!prodAgents.length) return null;
+    const withData = prodAgents.filter(a => a.hasFlBlueData);
+    const noData = prodAgents.filter(a => !a.hasFlBlueData);
     return {
       total: prodAgents.length,
-      allDone: prodAgents.filter(a => a.allCoursesDone).length,
-      notAllDone: prodAgents.filter(a => !a.allCoursesDone).length,
+      hasFlBlueData: withData.length > 0,
+      flBlueDone: withData.filter(a => a.flBlueDone).length,
+      flBlueNotDone: withData.filter(a => !a.flBlueDone).length,
+      noData: noData.length,
     };
   }, [prodAgents]);
 
@@ -619,7 +668,7 @@ export default function ProductionReadinessChecker() {
     const prodFilters = ["production", "prod_flblue_incomplete"];
     if (prodFilters.includes(filter)) {
       let out = prodAgents;
-      if (filter === "prod_flblue_incomplete") out = out.filter(a => !a.allCoursesDone);
+      if (filter === "prod_flblue_incomplete") out = out.filter(a => a.hasFlBlueData ? !a.flBlueDone : !a.allCoursesDone);
       if (search) {
         const s = search.toLowerCase();
         out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s));
@@ -762,7 +811,7 @@ export default function ProductionReadinessChecker() {
     prodAgents.forEach(a => {
       rows.push([
         "Production", a.name, a.sid, a.status, a.certPct !== null ? a.certPct : "N/A",
-        a.allCoursesDone ? "All Done" : "Cert " + a.certPct + "% (no per-course data)",
+        a.flBlueDone === true ? "Complete" : a.flBlueDone === false ? "Not Done" : a.allCoursesDone ? "All Done (cert 100%)" : "No Data",
         a.bgStatus || "N/A",
       ]);
     });
@@ -790,8 +839,13 @@ export default function ProductionReadinessChecker() {
     if (prodStats) {
       const pct = Math.round(prodStats.certComplete / prodStats.total * 100);
       text += `PRODUCTION AGENTS (${prodStats.total})\n`;
-      text += `• All Courses Done (cert 100%): ${prodStats.allDone} (${pct}%)\n`;
-      text += `• Cert Not 100%: ${prodStats.notAllDone} — no per-course data available, check ShyftOff app\n\n`;
+      if (prodStats.hasFlBlueData) {
+        text += `• FL Blue Complete: ${prodStats.flBlueDone} (${pct}%)\n`;
+        text += `• FL Blue Not Done: ${prodStats.flBlueNotDone}\n\n`;
+      } else {
+        text += `• All Courses Done (cert 100%): ${prodStats.total - prodStats.noData}\n`;
+        text += `• No per-course data — upload production-export files for FL Blue detail\n\n`;
+      }
     }
     if (stats) {
       text += `PIPELINE AGENTS (${stats.total})\n`;
@@ -957,35 +1011,41 @@ export default function ProductionReadinessChecker() {
                   <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>FL Blue 2026 Uptraining</span>
                 </div>
                 <div className="flex items-center gap-3 text-xs" style={{ color: "#5c3d7a" }}>
-                  {prodStats && <span>Production: {prodStats.allDone}/{prodStats.total} all courses done</span>}
+                  {prodStats && <span>Production: {prodStats.hasFlBlueData ? prodStats.flBlueDone : "?"}/{prodStats.total} FL Blue done</span>}
                   <span>Pipeline: {stats.flBlueDone}/{stats.total} complete</span>
                 </div>
               </button>
               {openSections.has("flblue") && (
                 <div className="px-4 py-3" style={{ background: "#27133A" }}>
-                  {/* Production agents — no per-course FL Blue data available */}
+                  {/* Production agents */}
                   {prodStats && (
                     <div className="mb-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="text-xs font-semibold" style={{ color: "#7a5f9a" }}>Production Agents ({prodStats.total})</div>
-                        <div className="text-xs" style={{ color: "#5c3d7a" }}>No per-course data — production export only has aggregate cert %</div>
-                      </div>
+                      <div className="text-xs font-semibold mb-2" style={{ color: "#7a5f9a" }}>Production Agents ({prodStats.total}){!prodStats.hasFlBlueData && <span style={{ color: "#5c3d7a" }}> — upload production-export files for per-course FL Blue data</span>}</div>
                       <div className="grid grid-cols-2 gap-2">
                         <button onClick={() => setFilter(filter === "production" ? "all" : "production")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "production" ? "#1a4d2e44" : "#1a4d2e22", border: `1px solid ${filter === "production" ? "#4ade80" : "#1a4d2e"}` }}>
                           <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-xs font-bold" style={{ color: "#4ade80" }}>All Courses Done</span>
-                            <span className="text-xl font-black" style={{ color: "#4ade80" }}>{prodStats.allDone}</span>
+                            <span className="text-xs font-bold" style={{ color: "#4ade80" }}>FL Blue Complete</span>
+                            <span className="text-xl font-black" style={{ color: "#4ade80" }}>{prodStats.hasFlBlueData ? prodStats.flBlueDone : prodStats.total - prodStats.noData + " (cert 100%)"}</span>
                           </div>
-                          <div className="text-xs" style={{ color: "#5c3d7a" }}>Cert 100% — all courses including FL Blue confirmed.</div>
+                          <div className="text-xs" style={{ color: "#5c3d7a" }}>{prodStats.hasFlBlueData ? "Confirmed from per-course data." : "Based on aggregate cert only."}</div>
                         </button>
-                        <button onClick={() => setFilter(filter === "prod_flblue_incomplete" ? "all" : "prod_flblue_incomplete")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "prod_flblue_incomplete" ? "#3d205744" : "#3d205722", border: `1px solid ${filter === "prod_flblue_incomplete" ? "#b8a5d4" : "#3d2057"}` }}>
+                        <button onClick={() => setFilter(filter === "prod_flblue_incomplete" ? "all" : "prod_flblue_incomplete")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "prod_flblue_incomplete" ? "#FF786622" : "#FF786611", border: `1px solid ${filter === "prod_flblue_incomplete" ? "#FF7866" : "#4D1F3B"}` }}>
                           <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-xs font-bold" style={{ color: "#b8a5d4" }}>Cert Not 100%</span>
-                            <span className="text-xl font-black" style={{ color: "#b8a5d4" }}>{prodStats.notAllDone}</span>
+                            <span className="text-xs font-bold" style={{ color: "#FF7866" }}>FL Blue Not Done</span>
+                            <span className="text-xl font-black" style={{ color: "#FF7866" }}>{prodStats.hasFlBlueData ? prodStats.flBlueNotDone : prodStats.noData}</span>
                           </div>
-                          <div className="text-xs" style={{ color: "#5c3d7a" }}>Missing course(s) — check ShyftOff app to verify which.</div>
+                          <div className="text-xs" style={{ color: "#5c3d7a" }}>{prodStats.hasFlBlueData ? "Confirmed from per-course data." : "No per-course data available."}</div>
                         </button>
                       </div>
+                      {/* Progress bar */}
+                      {prodStats.hasFlBlueData && (
+                      <div className="flex items-center gap-3 mt-2">
+                        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: "#3d2057" }}>
+                          <div className="h-full rounded-full" style={{ width: `${Math.round(prodStats.flBlueDone / prodStats.total * 100)}%`, background: "#4ade80" }} />
+                        </div>
+                        <span className="text-xs font-bold" style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>{Math.round(prodStats.flBlueDone / prodStats.total * 100)}%</span>
+                      </div>
+                      )}
                     </div>
                   )}
                   {/* Pipeline agents — Done vs Not Done */}
@@ -1181,8 +1241,8 @@ export default function ProductionReadinessChecker() {
                             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
                           </div>
                           )}
-                          {a.isProd && !a.allCoursesDone && (
-                            <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#b8a5d4", fontSize: 10 }}>CERT {a.certPct}%</span>
+                          {a.isProd && a.flBlueDone === false && (
+                            <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FF7866", fontSize: 10 }}>FL BLUE NOT DONE</span>
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-xs" style={{ color: "#b8a5d4" }}>{a.status}</td>
@@ -1224,7 +1284,7 @@ export default function ProductionReadinessChecker() {
                           }
                         </td>
                         <td className="px-3 py-2.5 text-center">{a.isProd
-                          ? <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: a.allCoursesDone ? "#1a4d2e" : "#3d2057", color: a.allCoursesDone ? "#4ade80" : "#b8a5d4" }}>{a.allCoursesDone ? "COMPLETE" : `CERT ${a.certPct}%`}</span>
+                          ? <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: a.flBlueDone === true ? "#1a4d2e" : a.flBlueDone === false ? "#4D1F3B" : "#3d2057", color: a.flBlueDone === true ? "#4ade80" : a.flBlueDone === false ? "#FF7866" : "#b8a5d4" }}>{a.flBlueDone === true ? "FL BLUE ✓" : a.flBlueDone === false ? "FL BLUE ✗" : `CERT ${a.certPct}%`}</span>
                           : <Badge type={a.readyStatus} />
                         }</td>
                       </tr>
@@ -1288,8 +1348,8 @@ export default function ProductionReadinessChecker() {
                 {/* Banner — different for prod vs pipeline */}
                 {ag.isProd ? (
                   <div className="px-4 py-2.5" style={{ background: ag.certPct === 100 ? "#1a4d2e33" : "#3d300033", borderBottom: "1px solid #3d2057" }}>
-                    <span className="text-sm font-semibold" style={{ color: ag.certPct === 100 ? "#4ade80" : "#b8a5d4" }}>
-                      {ag.certPct === 100 ? "All courses complete" : `Cert ${ag.certPct}% — missing course(s), check ShyftOff app`}
+                    <span className="text-sm font-semibold" style={{ color: ag.flBlueDone === true ? "#4ade80" : ag.flBlueDone === false ? "#FF7866" : "#b8a5d4" }}>
+                      {ag.flBlueDone === true ? "FL Blue complete" : ag.flBlueDone === false ? "FL Blue not done" : ag.allCoursesDone ? "All courses done" : `Cert ${ag.certPct}%`}
                     </span>
                   </div>
                 ) : (
@@ -1328,7 +1388,9 @@ export default function ProductionReadinessChecker() {
                     </div>
                     <div className="flex justify-between">
                       <span style={{ color: "#7a5f9a" }}>FL Blue Status</span>
-                      <span style={{ color: ag.allCoursesDone ? "#4ade80" : "#b8a5d4" }}>{ag.allCoursesDone ? "✓ All courses done" : "No per-course data — check ShyftOff app"}</span>
+                      <span style={{ color: ag.flBlueDone === true ? "#4ade80" : ag.flBlueDone === false ? "#FF7866" : "#b8a5d4" }}>
+                        {ag.flBlueDone === true ? `✓ Complete${ag.flBluePct !== null ? "" : ""}` : ag.flBlueDone === false ? `✗ Not done${ag.flBluePct !== null ? ` (${ag.flBluePct}%)` : ""}` : ag.allCoursesDone ? "✓ All courses done (cert 100%)" : "No per-course data"}
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span style={{ color: "#7a5f9a" }}>BG Check</span>
