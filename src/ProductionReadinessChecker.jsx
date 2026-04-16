@@ -364,8 +364,30 @@ export default function ProductionReadinessChecker() {
       return ldata;
     }
 
-    const agents = [];
+    // Deduplicate agents by ShyftOff ID when multiple files are uploaded
+    // Merge rows: keep richer data (CIP BG JSON + Roster/Nesting simple fields)
+    const seenSids = new Map();
     cipData.forEach(row => {
+      const sid = (row.shyftoff_id || "").trim();
+      if (!sid) return;
+      if (seenSids.has(sid)) {
+        const existing = seenSids.get(sid);
+        // Merge: overlay CIP JSON bg if the existing row doesn't have it
+        if (row.background_check && !existing.background_check) existing.background_check = row.background_check;
+        // Merge: overlay simple bg status if existing doesn't have it
+        if (row.background_check_status && !existing.background_check_status) existing.background_check_status = row.background_check_status;
+        // Merge: keep stale_level if available
+        if (row.stale_level && !existing.stale_level) existing.stale_level = row.stale_level;
+        // Merge: prefer non-empty cert progress
+        if (row.certification_progress && !existing.certification_progress) existing.certification_progress = row.certification_progress;
+        return;
+      }
+      seenSids.set(sid, { ...row });
+    });
+    const dedupedCip = [...seenSids.values()];
+
+    const agents = [];
+    dedupedCip.forEach(row => {
       const name = (row.agent_nm || row.agent_name || "").trim();
       const sid = (row.shyftoff_id || "").trim();
       const status = (row.status || "").trim();
@@ -417,8 +439,27 @@ export default function ProductionReadinessChecker() {
       } else {
         inLitmos = ldata !== null;
       }
-      const bgStatus = (row.background_check_status || "").trim().toLowerCase();
-      const bgCleared = bgStatus === "cleared";
+      // Parse background check from both formats:
+      // Roster/Nesting: simple `background_check_status` string ("cleared", "pending", etc.)
+      // CIP Export: JSON `background_check` with process_status/report_status
+      let bgStatus = (row.background_check_status || "").trim().toLowerCase();
+      let cipBgProcess = "";
+      let cipBgReport = "";
+      const bgJson = (row.background_check || "").trim();
+      if (bgJson.startsWith("[")) {
+        try {
+          const arr = JSON.parse(bgJson);
+          if (arr.length > 0) {
+            cipBgProcess = (arr[0].process_status || "").toUpperCase();
+            cipBgReport = (arr[0].report_status || "").toLowerCase();
+          }
+        } catch {}
+      }
+      // If no simple status but CIP JSON exists, derive status from it
+      if (!bgStatus && cipBgProcess) {
+        bgStatus = cipBgProcess === "PASSED" ? "cleared" : cipBgReport || cipBgProcess.toLowerCase();
+      }
+      const bgCleared = bgStatus === "cleared" || cipBgProcess === "PASSED";
       const createdAt = row.created_at ? new Date(row.created_at) : null;
       const lastChanged = row.last_changed || row.status_updated_at || "";
       const changedAt = lastChanged ? new Date(lastChanged) : null;
@@ -438,12 +479,15 @@ export default function ProductionReadinessChecker() {
       const isGhost = isNesting && !inLitmos;
       // Missing CCAAS = needs ccaas_id assigned before moving to production
       const missingCcaas = !hasCcaas;
+      // BG mismatch: simple status says cleared but CIP JSON says still IN_PROGRESS
+      const isBgMismatch = bgCleared && cipBgProcess === "IN_PROGRESS";
       // Waiting for creds = Roster courses done (NB Cert + FL Blue), BG cleared, not yet credentialed
       const isWaitingForCreds = !inLitmos && bgCleared && rosterCoursesDone;
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
-      // Split stale into: in credentials queue vs truly stale
-      const isStaleInQueue = isStaleWaiter && isCredentialsRequested;
-      const isTrulyStale = isStaleWaiter && !isCredentialsRequested;
+      // Split stale into 3 sub-groups
+      const isStaleBgMismatch = isStaleWaiter && isBgMismatch;
+      const isStaleInQueue = isStaleWaiter && !isBgMismatch && isCredentialsRequested;
+      const isTrulyStale = isStaleWaiter && !isBgMismatch && !isCredentialsRequested;
       const hasAccountIssue = !bgCleared && bgStatus !== "";
 
       const allLitmos = litmosCount === 14;
@@ -476,7 +520,8 @@ export default function ProductionReadinessChecker() {
         createdAtRaw: row.created_at || "",
         lastChangedRaw: lastChanged,
         isNesting, isRoster, isCredentialsRequested, shyftoffStaleLevel,
-        isGhost, isWaitingForCreds, isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
+        cipBgProcess, cipBgReport, isBgMismatch,
+        isGhost, isWaitingForCreds, isStaleWaiter, isStaleInQueue, isTrulyStale, isStaleBgMismatch, hasAccountIssue,
         credentialNote,
       });
     });
@@ -497,6 +542,7 @@ export default function ProductionReadinessChecker() {
     if (filter === "stale") out = out.filter(a => a.isStaleWaiter);
     if (filter === "stale_queue") out = out.filter(a => a.isStaleInQueue);
     if (filter === "stale_true") out = out.filter(a => a.isTrulyStale);
+    if (filter === "stale_bg") out = out.filter(a => a.isStaleBgMismatch);
     if (filter === "account_issues") out = out.filter(a => a.hasAccountIssue);
     if (search) {
       const s = search.toLowerCase();
@@ -519,6 +565,7 @@ export default function ProductionReadinessChecker() {
       staleWaiters: results.filter(a => a.isStaleWaiter).length,
       staleInQueue: results.filter(a => a.isStaleInQueue).length,
       trulyStale: results.filter(a => a.isTrulyStale).length,
+      staleBgMismatch: results.filter(a => a.isStaleBgMismatch).length,
       accountIssues: results.filter(a => a.hasAccountIssue).length,
     };
   }, [results]);
@@ -562,6 +609,7 @@ export default function ProductionReadinessChecker() {
     const ghostNames = results.filter(a => a.isGhost).map(a => a.name);
     const staleQueueNames = results.filter(a => a.isStaleInQueue).map(a => a.name);
     const trulyStaleNames = results.filter(a => a.isTrulyStale).map(a => a.name);
+    const bgMismatchNames = results.filter(a => a.isStaleBgMismatch).map(a => a.name);
 
     let body = `Hi Jayden,\n\nHere is the NationsBenefits pipeline readiness summary as of ${today}.\n`;
     body += `\nPIPELINE OVERVIEW\n`;
@@ -595,6 +643,12 @@ export default function ProductionReadinessChecker() {
       body += `Waiting 3+ weeks with no credentials request — needs manual investigation.\n`;
       trulyStaleNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
       if (trulyStaleNames.length > 10) body += `• ...and ${trulyStaleNames.length - 10} more\n`;
+    }
+    if (bgMismatchNames.length > 0) {
+      body += `\nBG Check Mismatch (${bgMismatchNames.length}):\n`;
+      body += `Roster/Nesting shows BG cleared but CIP export shows In Progress — systemic backend issue.\n`;
+      bgMismatchNames.slice(0, 10).forEach(n => { body += `• ${n}\n`; });
+      if (bgMismatchNames.length > 10) body += `• ...and ${bgMismatchNames.length - 10} more\n`;
     }
     if (stats.ghosts > 0) {
       body += `\nNesting Without Credentials (${stats.ghosts}):\n`;
@@ -749,6 +803,17 @@ export default function ProductionReadinessChecker() {
                         Waiting 3+ weeks with no credentials request — needs manual investigation.
                       </div>
                     </button>
+                    {stats.staleBgMismatch > 0 && (
+                    <button onClick={() => { setFilter("stale_bg"); setActiveTab("dashboard"); }} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: "#FFE56615", border: "1px solid #FFE566" }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold" style={{ color: "#FFE566" }}>BG Check Mismatch</span>
+                        <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.staleBgMismatch}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>
+                        Roster/Nesting shows BG cleared but CIP export shows In Progress — systemic backend issue, not truly stale.
+                      </div>
+                    </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -824,6 +889,7 @@ export default function ProductionReadinessChecker() {
                             {a.hasAccountIssue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FFE566", fontSize: 10 }}>BG: {a.bgStatus}</span>}
                             {a.isTrulyStale && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FF7866", fontSize: 10 }}>STALE {a.daysSinceChange}d</span>}
                             {a.isStaleInQueue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#8F68D3", fontSize: 10 }}>IN QUEUE {a.daysSinceChange}d</span>}
+                            {a.isStaleBgMismatch && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d3000", color: "#FFE566", fontSize: 10 }}>BG MISMATCH {a.daysSinceChange}d</span>}
                             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
                           </div>
                         </td>
@@ -1091,6 +1157,11 @@ export default function ProductionReadinessChecker() {
                   {ag.isTrulyStale && (
                     <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B", color: "#FF7866" }}>
                       Waiting {ag.daysSinceChange}+ days with no credentials request — needs manual investigation.
+                    </div>
+                  )}
+                  {ag.isStaleBgMismatch && (
+                    <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#FFE56615", border: "1px solid #FFE566", color: "#FFE566" }}>
+                      BG Check Mismatch: Roster/Nesting shows "cleared" but CIP export shows process_status: "{ag.cipBgProcess}", report_status: "{ag.cipBgReport}" — systemic backend issue.
                     </div>
                   )}
                   {ag.shyftoffStaleLevel && (
