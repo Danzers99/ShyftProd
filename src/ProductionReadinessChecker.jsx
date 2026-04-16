@@ -756,6 +756,54 @@ export default function ProductionReadinessChecker() {
     downloadCsv(headers, rows, `pipeline_issues_${today}.csv`);
   };
 
+  const handleExportFlBlue = () => {
+    const today = new Date().toISOString().split("T")[0];
+    const headers = ["Group","Agent Name","ShyftOff ID","Status","Cert Progress %","FL Blue Status","BG Status"];
+    const rows = [];
+    // Production agents
+    prodAgents.forEach(a => {
+      rows.push([
+        "Production", a.name, a.sid, a.status, a.certPct !== null ? a.certPct : "N/A",
+        a.flBlueComplete ? "Complete" : a.flBlueMissingOnly ? "Missing (75% = only FL Blue)" : "Likely Incomplete",
+        a.bgStatus || "N/A",
+      ]);
+    });
+    // Pipeline agents
+    if (results) {
+      results.forEach(a => {
+        rows.push([
+          "Pipeline", a.name, a.sid, a.status, a.shyftoffPct !== null ? a.shyftoffPct : "N/A",
+          a.flBlueDone ? "Complete" : "Incomplete",
+          a.bgStatus || "N/A",
+        ]);
+      });
+    }
+    rows.sort((a, b) => {
+      if (a[0] !== b[0]) return a[0].localeCompare(b[0]);
+      return a[4] === "Complete" ? 1 : -1; // Incomplete first
+    });
+    downloadCsv(headers, rows, `fl_blue_uptraining_${today}.csv`);
+  };
+
+  const flBlueSummaryText = useMemo(() => {
+    if (!prodStats && !stats) return "";
+    const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    let text = `FL Blue 2026 Uptraining Summary — ${today}\n\n`;
+    if (prodStats) {
+      const pct = Math.round(prodStats.certComplete / prodStats.total * 100);
+      text += `PRODUCTION AGENTS (${prodStats.total})\n`;
+      text += `• FL Blue Complete (cert 100%): ${prodStats.certComplete} (${pct}%)\n`;
+      text += `• FL Blue Incomplete (cert < 100%): ${prodStats.certBelow100}\n`;
+      text += `• Missing FL Blue Only (cert 75%): ${prodStats.at75}\n\n`;
+    }
+    if (stats) {
+      text += `PIPELINE AGENTS (${stats.total})\n`;
+      text += `• FL Blue Done: ${stats.flBlueDone}\n`;
+      text += `• FL Blue Incomplete: ${stats.flBlueIncomplete}\n`;
+    }
+    return text;
+  }, [prodStats, stats]);
+
   const emailBody = useMemo(() => {
     if (!stats || !results) return "";
     const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
@@ -974,6 +1022,15 @@ export default function ProductionReadinessChecker() {
                       </button>
                     </div>
                   </div>
+                  {/* FL Blue actions */}
+                  <div className="flex gap-2 mt-3 pt-3" style={{ borderTop: "1px solid #3d2057" }}>
+                    <button onClick={handleExportFlBlue} className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#3d2057", color: "#b8a5d4" }}>
+                      Export FL Blue CSV
+                    </button>
+                    <button onClick={() => { navigator.clipboard.writeText(flBlueSummaryText); }} className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#3d2057", color: "#b8a5d4" }}>
+                      Copy Summary
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1111,7 +1168,7 @@ export default function ProductionReadinessChecker() {
                       <tr key={(a.key || a.sid) + idx}
                         className="cursor-pointer transition-all group"
                         style={{ background: idx % 2 === 0 ? "#27133A" : "#1a0d2e", borderBottom: "1px solid #1a0d2e" }}
-                        onClick={() => !a.isProd && setExpandedRow(expandedRow === idx ? null : idx)}
+                        onClick={() => setExpandedRow(expandedRow === idx ? null : idx)}
                         onMouseEnter={e => e.currentTarget.style.background = "#3d2057"}
                         onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? "#27133A" : "#1a0d2e"}>
                         <td className="px-3 py-2.5">
@@ -1231,7 +1288,9 @@ export default function ProductionReadinessChecker() {
                     </button>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    <Badge type={ag.readyStatus} />
+                    {ag.isProd
+                      ? <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: "#794EC2", color: "#E8DFF6" }}>PRODUCTION</span>
+                      : <Badge type={ag.readyStatus} />}
                     <button onClick={() => setExpandedRow(null)} className="text-lg leading-none px-1" style={{ color: "#7a5f9a" }}>&times;</button>
                   </div>
                 </div>
@@ -1240,7 +1299,14 @@ export default function ProductionReadinessChecker() {
                     <span className="text-xs" style={{ color: "#7a5f9a", fontFamily: "'IBM Plex Mono', monospace" }}>{ag.sid}</span>
                   </div>
                 )}
-                {/* Credential call-out banner */}
+                {/* Banner — different for prod vs pipeline */}
+                {ag.isProd ? (
+                  <div className="px-4 py-2.5" style={{ background: ag.certPct === 100 ? "#1a4d2e33" : "#3d300033", borderBottom: "1px solid #3d2057" }}>
+                    <span className="text-sm font-semibold" style={{ color: ag.certPct === 100 ? "#4ade80" : "#FFE566" }}>
+                      {ag.certPct === 100 ? "All courses complete" : `Cert ${ag.certPct}% — ${ag.flBlueMissingOnly ? "Only FL Blue missing" : "FL Blue likely incomplete"}`}
+                    </span>
+                  </div>
+                ) : (
                 <div className="px-4 py-2.5" style={{
                   background: ag.rosterCoursesDone && ag.bgCleared && !ag.inLitmos ? "#794EC233"
                     : ag.hasAccountIssue ? "#4D1F3B33"
@@ -1258,8 +1324,36 @@ export default function ProductionReadinessChecker() {
                     {ag.credentialNote}
                   </span>
                 </div>
+                )}
               </div>
 
+              {/* Production agent detail */}
+              {ag.isProd && (
+                <div className="px-4 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>Production Agent Details</div>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between">
+                      <span style={{ color: "#7a5f9a" }}>Status</span>
+                      <span style={{ color: "#E8DFF6" }}>{ag.status}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span style={{ color: "#7a5f9a" }}>Certification Progress</span>
+                      <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: ag.certPct === 100 ? "#4ade80" : "#FFE566" }}>{ag.certPct}%</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span style={{ color: "#7a5f9a" }}>FL Blue Status</span>
+                      <span style={{ color: ag.flBlueComplete ? "#4ade80" : "#FFE566" }}>{ag.flBlueComplete ? "✓ Complete" : ag.flBlueMissingOnly ? "Missing (75% = 3/4 courses)" : "Likely incomplete"}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span style={{ color: "#7a5f9a" }}>BG Check</span>
+                      <span style={{ color: ag.bgStatus === "cleared" ? "#4ade80" : "#FFE566" }}>{ag.bgStatus || "unknown"}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Pipeline agent sections */}
+              {!ag.isProd && <>
               {/* Quick status row — BG, Credentials, Last Change */}
               <div className="grid grid-cols-3 gap-0" style={{ borderBottom: "1px solid #3d2057" }}>
                 <div className="px-3 py-2.5 text-center" style={{ borderRight: "1px solid #3d2057" }}>
@@ -1438,6 +1532,7 @@ export default function ProductionReadinessChecker() {
                   )}
                 </div>
               )}
+              </>}
             </div>
           </>
         );
