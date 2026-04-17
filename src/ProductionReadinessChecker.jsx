@@ -309,14 +309,21 @@ export default function ProductionReadinessChecker() {
     });
 
     // People Report: who has a Litmos account (= has credentials)
+    // Track name → usernames so we can detect collisions (multiple people with same name)
     const litmosPeopleEmails = new Set();
     const litmosPeopleNames = new Set();
+    const litmosNameToUsernames = new Map(); // nameKey → [usernames, ...] for collision detection
     (peopleData || []).forEach(r => {
       const email = (r["People.Username"] || "").toLowerCase().trim();
       if (email) litmosPeopleEmails.add(email);
       const first = r["People.First Name"] || "";
       const last = r["People.Last Name"] || "";
-      if (first || last) litmosPeopleNames.add(nameKey(first, last));
+      if (first || last) {
+        const k = nameKey(first, last);
+        litmosPeopleNames.add(k);
+        if (!litmosNameToUsernames.has(k)) litmosNameToUsernames.set(k, []);
+        if (email) litmosNameToUsernames.get(k).push(email);
+      }
     });
     const hasPeopleReport = litmosPeopleEmails.size > 0;
 
@@ -466,13 +473,33 @@ export default function ProductionReadinessChecker() {
       // Check if agent has a Litmos account (= has credentials)
       // Use People Report if available (definitive), otherwise fall back to Course Data presence
       let inLitmos;
+      let hasNameCollision = false;
+      let collidingUsernames = [];
       if (hasPeopleReport) {
         const candidateEm = candidateEmails(name);
-        inLitmos = litmosPeopleNames.has(key) || candidateEm.some(e => litmosPeopleEmails.has(e));
-        // Also try multi-part name keys
-        if (!inLitmos && parts.length > 2) {
-          inLitmos = litmosPeopleNames.has(nameKey(parts.slice(0, -1).join(""), last))
-            || litmosPeopleNames.has(nameKey(first, parts.slice(1).join("")));
+        const emailMatch = candidateEm.some(e => litmosPeopleEmails.has(e));
+        // Detect name collision: multiple Litmos accounts share this name
+        const collisionCount = (litmosNameToUsernames.get(key) || []).length;
+        const multiKey1 = parts.length > 2 ? nameKey(parts.slice(0, -1).join(""), last) : null;
+        const multiKey2 = parts.length > 2 ? nameKey(first, parts.slice(1).join("")) : null;
+        const multiCount1 = multiKey1 ? (litmosNameToUsernames.get(multiKey1) || []).length : 0;
+        const multiCount2 = multiKey2 ? (litmosNameToUsernames.get(multiKey2) || []).length : 0;
+        const totalCollisions = Math.max(collisionCount, multiCount1, multiCount2);
+        hasNameCollision = totalCollisions > 1;
+        if (hasNameCollision) {
+          collidingUsernames = [
+            ...(litmosNameToUsernames.get(key) || []),
+            ...(multiKey1 ? (litmosNameToUsernames.get(multiKey1) || []) : []),
+            ...(multiKey2 ? (litmosNameToUsernames.get(multiKey2) || []) : []),
+          ].filter((v, i, arr) => arr.indexOf(v) === i);
+          // For ambiguous names, require an EXACT email match. Name-only match is unreliable.
+          inLitmos = emailMatch;
+        } else {
+          // Unique name — normal matching applies
+          inLitmos = litmosPeopleNames.has(key) || emailMatch;
+          if (!inLitmos && parts.length > 2) {
+            inLitmos = litmosPeopleNames.has(multiKey1) || litmosPeopleNames.has(multiKey2);
+          }
         }
       } else {
         inLitmos = ldata !== null;
@@ -571,6 +598,7 @@ export default function ProductionReadinessChecker() {
         navAttended, navAvailable: navData && navData.length > 0,
         readyStatus, allLitmos,
         inLitmos, hasCcaas, missingCcaas, bgStatus, bgCleared,
+        hasNameCollision, collidingUsernames,
         daysSinceChange, daysSinceCreated,
         createdAtRaw: row.created_at || "",
         lastChangedRaw: lastChanged,
@@ -689,6 +717,7 @@ export default function ProductionReadinessChecker() {
     if (filter === "stale_true") out = out.filter(a => a.isTrulyStale);
     if (filter === "stale_bg") out = out.filter(a => a.isBgMismatch);
     if (filter === "account_issues") out = out.filter(a => a.hasAccountIssue);
+    if (filter === "name_collision") out = out.filter(a => a.hasNameCollision);
     if (filter === "flblue_done") out = out.filter(a => a.flBlueDone);
     if (filter === "flblue_incomplete") out = out.filter(a => !a.flBlueDone);
     if (search) {
@@ -717,6 +746,7 @@ export default function ProductionReadinessChecker() {
       trulyStale: results.filter(a => a.isTrulyStale).length,
       staleBgMismatch: results.filter(a => a.isBgMismatch).length,
       accountIssues: results.filter(a => a.hasAccountIssue).length,
+      nameCollisions: results.filter(a => a.hasNameCollision).length,
       flBlueDone: results.filter(a => a.flBlueDone).length,
       flBlueIncomplete: results.filter(a => !a.flBlueDone).length,
     };
@@ -760,7 +790,7 @@ export default function ProductionReadinessChecker() {
 
   const handleExportIssues = () => {
     if (!results) return;
-    const issueAgents = results.filter(a => a.isBgMismatch || a.hasAccountIssue || a.isGhost || a.isTrulyStale || a.isStaleInQueue);
+    const issueAgents = results.filter(a => a.isBgMismatch || a.hasAccountIssue || a.isGhost || a.isTrulyStale || a.isStaleInQueue || a.hasNameCollision);
     if (!issueAgents.length) return;
     const today = new Date().toISOString().split("T")[0];
     const headers = [
@@ -787,6 +817,9 @@ export default function ProductionReadinessChecker() {
       } else if (a.isStaleInQueue) {
         issueType = "Stale — In Queue";
         action = "Credentials requested 3+ weeks ago. Check if batch was processed.";
+      } else if (a.hasNameCollision) {
+        issueType = "Name Collision";
+        action = `Multiple Litmos accounts share this name: ${(a.collidingUsernames || []).join(", ")}. Verify manually before credentialing.`;
       }
       return [
         issueType, a.name, a.sid, a.status,
@@ -1088,12 +1121,12 @@ export default function ProductionReadinessChecker() {
                   <span className="text-xs" style={{ color: "#7a5f9a" }}>{openSections.has("health") ? "▾" : "▸"}</span>
                   <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Pipeline Health</span>
                 </div>
-                <div className="text-xs" style={{ color: stats.ghosts + stats.accountIssues + stats.staleBgMismatch > 0 ? "#FF7866" : "#5c3d7a" }}>
-                  {stats.ghosts + stats.accountIssues + stats.staleBgMismatch} issues
+                <div className="text-xs" style={{ color: stats.ghosts + stats.accountIssues + stats.staleBgMismatch + stats.nameCollisions > 0 ? "#FF7866" : "#5c3d7a" }}>
+                  {stats.ghosts + stats.accountIssues + stats.staleBgMismatch + stats.nameCollisions} issues
                 </div>
               </button>
               {openSections.has("health") && (
-                <div className="px-4 py-3 grid grid-cols-3 gap-2" style={{ background: "#27133A" }}>
+                <div className="px-4 py-3 grid grid-cols-4 gap-2" style={{ background: "#27133A" }}>
                   <button onClick={() => setFilter(filter === "ghosts" ? "all" : "ghosts")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "ghosts" ? "#3d152544" : "#3d152522", border: `1px solid ${filter === "ghosts" ? "#FF7866" : "#4D1F3B"}` }}>
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-xs font-bold" style={{ color: "#FF7866" }}>Nesting — No Creds</span>
@@ -1114,6 +1147,13 @@ export default function ProductionReadinessChecker() {
                       <span className="text-xl font-black" style={{ color: "#FFE566" }}>{stats.staleBgMismatch}</span>
                     </div>
                     <div className="text-xs" style={{ color: "#5c3d7a" }}>Roster ≠ CIP. Flag to Product.</div>
+                  </button>
+                  <button onClick={() => setFilter(filter === "name_collision" ? "all" : "name_collision")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "name_collision" ? "#3d205744" : "#3d205722", border: `1px solid ${filter === "name_collision" ? "#FF66C4" : "#794EC2"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#FF66C4" }}>Name Collisions</span>
+                      <span className="text-xl font-black" style={{ color: "#FF66C4" }}>{stats.nameCollisions}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>Same name as existing Litmos users. Verify manually.</div>
                   </button>
                 </div>
               )}
@@ -1238,7 +1278,8 @@ export default function ProductionReadinessChecker() {
                             {a.isTrulyStale && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FF7866", fontSize: 10 }}>STALE {a.daysSinceChange}d</span>}
                             {a.isStaleInQueue && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#8F68D3", fontSize: 10 }}>IN QUEUE {a.daysSinceChange}d</span>}
                             {a.isBgMismatch && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d3000", color: "#FFE566", fontSize: 10 }}>BG MISMATCH{a.daysSinceChange !== null ? ` ${a.daysSinceChange}d` : ""}</span>}
-                            {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
+            {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
+            {a.hasNameCollision && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#FF66C4", fontSize: 10 }}>⚠ NAME COLLISION</span>}
                           </div>
                           )}
                           {a.isProd && a.flBlueDone === false && (
@@ -1545,7 +1586,7 @@ export default function ProductionReadinessChecker() {
               </div>
 
               {/* Anomaly alerts */}
-              {(ag.isGhost || ag.isStaleWaiter || ag.isBgMismatch || ag.hasAccountIssue) && (
+              {(ag.isGhost || ag.isStaleWaiter || ag.isBgMismatch || ag.hasAccountIssue || ag.hasNameCollision) && (
                 <div className="px-4 py-3 space-y-1.5">
                   <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Alerts</div>
                   {ag.isGhost && (
@@ -1576,6 +1617,19 @@ export default function ProductionReadinessChecker() {
                   {ag.hasAccountIssue && (
                     <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#4D1F3B33", border: "1px solid #4D1F3B", color: "#FFE566" }}>
                       BG check: {ag.bgStatus} — blocking progress
+                    </div>
+                  )}
+                  {ag.hasNameCollision && (
+                    <div className="rounded px-2 py-1.5 text-xs" style={{ background: "#3d205722", border: "1px solid #794EC2", color: "#FF66C4" }}>
+                      ⚠ Name Collision — multiple Litmos accounts share this name. Verify manually before credentialing.
+                      {ag.collidingUsernames && ag.collidingUsernames.length > 0 && (
+                        <div className="mt-1" style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
+                          Existing: {ag.collidingUsernames.join(", ")}
+                        </div>
+                      )}
+                      <div className="mt-1" style={{ color: "#7a5f9a", fontSize: 10 }}>
+                        {ag.inLitmos ? "Exact email match found — likely same person." : "No exact email match — likely a different person with same name."}
+                      </div>
                     </div>
                   )}
                 </div>
