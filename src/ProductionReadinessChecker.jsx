@@ -492,8 +492,11 @@ export default function ProductionReadinessChecker() {
             ...(multiKey1 ? (litmosNameToUsernames.get(multiKey1) || []) : []),
             ...(multiKey2 ? (litmosNameToUsernames.get(multiKey2) || []) : []),
           ].filter((v, i, arr) => arr.indexOf(v) === i);
-          // For ambiguous names, require an EXACT email match. Name-only match is unreliable.
-          inLitmos = emailMatch;
+          // Cannot reliably auto-match when multiple Litmos accounts share the name.
+          // candidateEmails generates the base pattern "first.last@domain" which
+          // always matches the FIRST colliding account — a false positive.
+          // Conservative default: mark as NOT in Litmos, require manual verification.
+          inLitmos = false;
         } else {
           // Unique name — normal matching applies
           inLitmos = litmosPeopleNames.has(key) || emailMatch;
@@ -1628,7 +1631,7 @@ export default function ProductionReadinessChecker() {
                         </div>
                       )}
                       <div className="mt-1" style={{ color: "#7a5f9a", fontSize: 10 }}>
-                        {ag.inLitmos ? "Exact email match found — likely same person." : "No exact email match — likely a different person with same name."}
+                        Tool cannot auto-match when multiple Litmos accounts share a name. Check ShyftOff/Litmos directly to see if this is a new person or one of the existing accounts.
                       </div>
                     </div>
                   )}
