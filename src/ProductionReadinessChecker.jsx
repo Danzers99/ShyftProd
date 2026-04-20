@@ -98,6 +98,40 @@ function nameParts(fullName) {
   return { first: p[0] || "", last: p[p.length - 1] || "" };
 }
 
+// Strip single-letter tokens (middle initials like "I.", "J", "M.") from a name.
+// Handles both "Candace I. Monger" and "Candace Monger I" → "Candace Monger".
+function stripMiddleInitials(fullName) {
+  return (fullName || "")
+    .trim()
+    .split(/\s+/)
+    .filter(p => {
+      const cleaned = p.replace(/[.,]/g, "");
+      return cleaned.length > 1; // drop single-letter tokens
+    })
+    .join(" ");
+}
+
+// Generate all name key variations for a full name — includes middle-initial-stripped version.
+function nameKeyVariations(fullName) {
+  const keys = new Set();
+  const parts = (fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    // Standard: first + last
+    keys.add(nameKey(parts[0], parts[parts.length - 1]));
+    // Multi-part first (for 3+ token names): first two joined + last
+    if (parts.length > 2) {
+      keys.add(nameKey(parts.slice(0, -1).join(""), parts[parts.length - 1]));
+      keys.add(nameKey(parts[0], parts.slice(1).join("")));
+    }
+    // Middle-initial-stripped version
+    const stripped = stripMiddleInitials(fullName).split(/\s+/).filter(Boolean);
+    if (stripped.length >= 2 && stripped.length !== parts.length) {
+      keys.add(nameKey(stripped[0], stripped[stripped.length - 1]));
+    }
+  }
+  return [...keys];
+}
+
 function candidateEmails(fullName) {
   const parts = (fullName || "").trim().replace(/['''`\u2018\u2019\u201B]/g, "").split(/\s+/).filter(Boolean);
   if (parts.length < 2) return [];
@@ -319,10 +353,17 @@ export default function ProductionReadinessChecker() {
       const first = r["People.First Name"] || "";
       const last = r["People.Last Name"] || "";
       if (first || last) {
-        const k = nameKey(first, last);
-        litmosPeopleNames.add(k);
-        if (!litmosNameToUsernames.has(k)) litmosNameToUsernames.set(k, []);
-        if (email) litmosNameToUsernames.get(k).push(email);
+        // Register both the raw name key AND all variations
+        // (handles "Candace Monger I" where middle initial is stored in last name field)
+        const fullName = `${first} ${last}`.trim();
+        const variations = nameKeyVariations(fullName);
+        variations.forEach(k => {
+          litmosPeopleNames.add(k);
+          if (!litmosNameToUsernames.has(k)) litmosNameToUsernames.set(k, []);
+          if (email && !litmosNameToUsernames.get(k).includes(email)) {
+            litmosNameToUsernames.get(k).push(email);
+          }
+        });
       }
     });
     const hasPeopleReport = litmosPeopleEmails.size > 0;
@@ -478,31 +519,27 @@ export default function ProductionReadinessChecker() {
       if (hasPeopleReport) {
         const candidateEm = candidateEmails(name);
         const emailMatch = candidateEm.some(e => litmosPeopleEmails.has(e));
-        // Detect name collision: multiple Litmos accounts share this name
-        const collisionCount = (litmosNameToUsernames.get(key) || []).length;
-        const multiKey1 = parts.length > 2 ? nameKey(parts.slice(0, -1).join(""), last) : null;
-        const multiKey2 = parts.length > 2 ? nameKey(first, parts.slice(1).join("")) : null;
-        const multiCount1 = multiKey1 ? (litmosNameToUsernames.get(multiKey1) || []).length : 0;
-        const multiCount2 = multiKey2 ? (litmosNameToUsernames.get(multiKey2) || []).length : 0;
-        const totalCollisions = Math.max(collisionCount, multiCount1, multiCount2);
-        hasNameCollision = totalCollisions > 1;
+        // Try all name variations (handles middle initials in any position)
+        const pipelineNameKeys = nameKeyVariations(name);
+        // Gather all usernames associated with any matching variation
+        const allMatchedUsernames = [];
+        let maxCollisionCount = 0;
+        pipelineNameKeys.forEach(k => {
+          const users = litmosNameToUsernames.get(k) || [];
+          users.forEach(u => { if (!allMatchedUsernames.includes(u)) allMatchedUsernames.push(u); });
+          if (users.length > maxCollisionCount) maxCollisionCount = users.length;
+        });
+        hasNameCollision = maxCollisionCount > 1;
         if (hasNameCollision) {
-          collidingUsernames = [
-            ...(litmosNameToUsernames.get(key) || []),
-            ...(multiKey1 ? (litmosNameToUsernames.get(multiKey1) || []) : []),
-            ...(multiKey2 ? (litmosNameToUsernames.get(multiKey2) || []) : []),
-          ].filter((v, i, arr) => arr.indexOf(v) === i);
+          collidingUsernames = allMatchedUsernames;
           // Cannot reliably auto-match when multiple Litmos accounts share the name.
           // candidateEmails generates the base pattern "first.last@domain" which
           // always matches the FIRST colliding account — a false positive.
           // Conservative default: mark as NOT in Litmos, require manual verification.
           inLitmos = false;
         } else {
-          // Unique name — normal matching applies
-          inLitmos = litmosPeopleNames.has(key) || emailMatch;
-          if (!inLitmos && parts.length > 2) {
-            inLitmos = litmosPeopleNames.has(multiKey1) || litmosPeopleNames.has(multiKey2);
-          }
+          // Unique name (0 or 1 Litmos match) — check all name variations
+          inLitmos = pipelineNameKeys.some(k => litmosPeopleNames.has(k)) || emailMatch;
         }
       } else {
         inLitmos = ldata !== null;
@@ -548,8 +585,10 @@ export default function ProductionReadinessChecker() {
       const daysSinceCreated = createdAt ? Math.floor((now - createdAt) / 86400000) : null;
 
       // Anomaly flags
-      // Ghost = in Nesting but not in Litmos (no credentials — Litmos presence = has credentials)
-      const isGhost = isNesting && !inLitmos;
+      // Ghost = in Nesting but confirmed not in Litmos.
+      // Excludes name collisions — when we can't confidently determine Litmos status,
+      // don't flag as ghost (we might be wrong about them lacking credentials).
+      const isGhost = isNesting && !inLitmos && !hasNameCollision;
       // Missing CCAAS = needs ccaas_id assigned before moving to production
       const missingCcaas = !hasCcaas;
       // BG mismatch: Roster/Nesting says "cleared" but CIP JSON says IN_PROGRESS
@@ -560,10 +599,12 @@ export default function ProductionReadinessChecker() {
       const isBgMismatch = simpleBgCleared && cipBgNotCleared;
 
       // Credential pipeline flags (cross-referencing status + actual data)
-      // Ready for credentials = courses done + BG cleared + not yet credentialed (strict, data-driven)
-      const isWaitingForCreds = !inLitmos && bgCleared && rosterCoursesDone;
+      // Ready for credentials = courses done + BG cleared + CONFIRMED not in Litmos.
+      // Excludes name collisions — we can't claim they need credentials if we can't
+      // confidently say they lack them.
+      const isWaitingForCreds = !inLitmos && !hasNameCollision && bgCleared && rosterCoursesDone;
       // Creds requested but courses not done = system advanced them prematurely
-      const isCredsRequestedNoCourses = isCredentialsRequested && !rosterCoursesDone && !inLitmos;
+      const isCredsRequestedNoCourses = isCredentialsRequested && !rosterCoursesDone && !inLitmos && !hasNameCollision;
       // Creds requested, courses done, BG cleared, but already in Litmos = already credentialed
       const isAlreadyCredentialed = isCredentialsRequested && inLitmos;
 
