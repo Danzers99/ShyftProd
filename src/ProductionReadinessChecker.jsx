@@ -826,6 +826,8 @@ export default function ProductionReadinessChecker() {
     return {
       total: results.length,
       ready: results.filter(a => a.readyStatus === "ready").length,
+      readyEng: results.filter(a => a.readyStatus === "ready" && a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign)).length,
+      readyBi: results.filter(a => a.readyStatus === "ready" && a.rowCampaign && /bilingual/i.test(a.rowCampaign)).length,
       litmosDone: results.filter(a => a.allLitmos).length,
       shyftoffDone: results.filter(a => a.shyftoffComplete).length,
       navAttended: results.filter(a => a.navAttended).length,
@@ -862,7 +864,7 @@ export default function ProductionReadinessChecker() {
 
   const handleExport = () => {
     if (!filtered.length) return;
-    const headers = ["Agent Name","ShyftOff ID","CIP Status","NB Email","Litmos (done/14)","ShyftOff Cert %","Nav Meeting","Readiness","In Litmos (Has Creds)","CCAAS ID","BG Check","Days Since Change","Flags"];
+    const headers = ["Agent Name","ShyftOff ID","Campaign","Already In Prod For","CIP Status","NB Email","Litmos (done/14)","ShyftOff Cert %","Nav Meeting","Readiness","In Litmos (Has Creds)","CCAAS ID","BG Check","Days Since Change","Flags"];
     const rows = filtered.map(a => {
       const flags = [];
       if (a.isGhost) flags.push("GHOST");
@@ -871,11 +873,14 @@ export default function ProductionReadinessChecker() {
       if (a.hasAccountIssue) flags.push("BG_ISSUE");
       if (a.isBgMismatch) flags.push("BG_MISMATCH");
       return [
-        a.name, a.sid, a.status, a.nbEmail,
-        `${a.litmosCount}/14`,
-        a.shyftoffPct !== null ? `${a.shyftoffPct}%` : "N/A",
+        a.name, a.sid,
+        a.rowCampaign || (a.isProd && a.prodCampaigns ? a.prodCampaigns.join("; ") : ""),
+        a.prodCampaigns ? a.prodCampaigns.join("; ") : "",
+        a.status, a.nbEmail || "",
+        a.isProd ? "N/A" : `${a.litmosCount}/14`,
+        a.isProd ? (a.certPct !== null ? `${a.certPct}%` : "N/A") : (a.shyftoffPct !== null ? `${a.shyftoffPct}%` : "N/A"),
         a.navAvailable ? (a.navAttended ? "YES" : "NO") : "N/A",
-        a.readyStatus.toUpperCase(),
+        a.isProd ? "PRODUCTION" : a.readyStatus.toUpperCase(),
         a.inLitmos ? "YES" : "NO",
         a.hasCcaas ? "YES" : "NO",
         a.bgStatus || "unknown",
@@ -1128,7 +1133,7 @@ export default function ProductionReadinessChecker() {
           <>
             <div className="grid grid-cols-5 gap-3 mb-5">
               <StatCard label="Pipeline Total" value={stats.total} sub={`${stats.engPipeline} ENG • ${stats.biPipeline} BI`} color="#E8DFF6" />
-              <StatCard label="Production Ready" value={stats.ready} sub="All 3 pillars complete" color="#4ade80" />
+              <StatCard label="Production Ready" value={stats.ready} sub={`${stats.readyEng} ENG • ${stats.readyBi} BI`} color="#4ade80" />
               <StatCard label="Litmos Complete" value={stats.litmosDone} sub="14/14 required courses" color="#8F68D3" />
               <StatCard label="ShyftOff Cert" value={stats.shyftoffDone} sub="100% certification progress" color="#FF66C4" />
               <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#FFE566" : "#5c3d7a"} />
@@ -1671,6 +1676,18 @@ export default function ProductionReadinessChecker() {
                     <span style={{ color: "#7a5f9a" }}>CIP Status</span>
                     <span style={{ color: "#E8DFF6" }}>{ag.status}</span>
                   </div>
+                  {ag.rowCampaign && (
+                    <div className="flex justify-between">
+                      <span style={{ color: "#7a5f9a" }}>Campaign (this row)</span>
+                      <span style={{ color: "#E8DFF6" }}>{ag.rowCampaign}</span>
+                    </div>
+                  )}
+                  {ag.prodCampaigns && ag.prodCampaigns.length > 0 && (
+                    <div className="flex justify-between">
+                      <span style={{ color: "#7a5f9a" }}>Already in Production for</span>
+                      <span style={{ color: "#4ade80" }}>{ag.prodCampaigns.join(", ")}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span style={{ color: "#7a5f9a" }}>CCAAS ID</span>
                     <span style={{ color: ag.hasCcaas ? "#4ade80" : "#FFE566" }}>{ag.hasCcaas ? "Assigned" : "Not assigned"}</span>
