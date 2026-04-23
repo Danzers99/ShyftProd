@@ -418,14 +418,34 @@ export default function ProductionReadinessChecker() {
       if (email && !litmosEmailMap[email]) litmosEmailMap[email] = litmosMap[key];
     });
 
+    // Nav Meeting attendance — only cares about WHO ATTENDED.
+    // Supports both the ShyftNav export (with "Did the Agent Attend?" column)
+    // and legacy Nav CSVs (Name/Email columns, all listed = attended).
     const navKeys = new Set();
     (navData || []).forEach(r => {
-      const vals = Object.values(r).map(v => (v || "").toLowerCase());
-      const name = r["Name"] || r["name"] || r["Agent Name"] || r["agent_name"] || r["Full Name"] || r["full_name"] || "";
-      if (name) {
-        const { first, last } = nameParts(name);
-        navKeys.add(nameKey(first, last));
+      // Attendance filter: if the file has the attendance column, only count "Yes" rows.
+      // Legacy CSVs without this column preserve old behavior (any listed = attended).
+      const attendField = r["Did the Agent Attend?"] || r["Attended"] || r["attended"] || "";
+      if (attendField !== "") {
+        const attendYes = attendField.trim().toLowerCase();
+        if (attendYes !== "yes" && attendYes !== "y" && attendYes !== "true") return;
       }
+
+      // Determine full name — prefer explicit Full Name, fall back to First+Last combo,
+      // then legacy single-field variants.
+      let name = r["Full Name"] || r["full_name"] || r["Name"] || r["name"] || r["Agent Name"] || r["agent_name"] || "";
+      if (!name) {
+        const first = (r["Agent First Name"] || r["First Name"] || r["first_name"] || "").trim();
+        const last = (r["Agent Last Name"] || r["Last Name"] || r["last_name"] || "").trim();
+        if (first || last) name = `${first} ${last}`.trim();
+      }
+
+      if (name) {
+        // Register all name variations (handles multi-part names + middle initials)
+        nameKeyVariations(name).forEach(k => navKeys.add(k));
+      }
+
+      // Email fallback (legacy Nav CSVs only — new ShyftNav export has no email column)
       const email = r["Email"] || r["email"] || r["NB Email"] || "";
       if (email) navKeys.add(email.toLowerCase().trim());
     });
@@ -545,7 +565,9 @@ export default function ProductionReadinessChecker() {
       const navCourseDone = (courseMap[NESTING_COURSES[1]] || 0) >= 100;
       const nestingCoursesDone = preProdDone && navCourseDone;
 
-      const navAttended = navKeys.has(key) || (ldata?.email && navKeys.has(ldata.email.toLowerCase()));
+      // Nav attendance — check all name variations (handles middle initials, multi-part names)
+      const navAttended = nameKeyVariations(name).some(k => navKeys.has(k))
+        || (ldata?.email && navKeys.has(ldata.email.toLowerCase()));
 
       // New fields for anomaly detection
       const hasCcaas = !!(row.ccaas_id || "").trim();
@@ -1104,7 +1126,7 @@ export default function ProductionReadinessChecker() {
           <FileUpload label="Litmos People Report" sublabel="Required — Who has a Litmos account" onFiles={f => setPeopleFiles(f)} multiple={false} files={peopleFiles} />
           <FileUpload label="Nesting / CIP Export" sublabel="Required — Dashboard or CIP agent export" onFiles={f => setCipFiles(f)} multiple files={cipFiles} />
           <FileUpload label="Production Exports" sublabel="Optional — Exclude current prod agents" onFiles={f => setProdFiles(f)} multiple files={prodFiles} />
-          <FileUpload label="Nav Meeting Tracker" sublabel="Optional — CSV with Name/Email columns" onFiles={f => setNavFiles(f)} multiple={false} files={navFiles} />
+          <FileUpload label="Nav Meeting Tracker" sublabel="Optional — ShyftNav export or legacy Name/Email CSV" onFiles={f => setNavFiles(f)} multiple={false} files={navFiles} />
         </div>
 
         <div className="flex gap-2 mb-5">
