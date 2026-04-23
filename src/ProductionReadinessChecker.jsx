@@ -328,19 +328,51 @@ export default function ProductionReadinessChecker() {
   const results = useMemo(() => {
     if (!litmosData || !cipData) return null;
 
-    const prodKeys = new Set();
-    const prodSids = new Set();
+    // Track production status BY CAMPAIGN so agents in prod for one campaign
+    // (e.g. Bilingual) can still be tracked in pipeline for another (e.g. ENG).
+    // Map: SID → Set of campaign names they're in production for
+    const prodCampaignsBySid = new Map();
+    const prodCampaignsByKey = new Map(); // name-key fallback when no SID
+    const addProdCampaign = (key, campaign) => {
+      if (!key || !campaign) return;
+      const map = key.includes("|") ? prodCampaignsByKey : prodCampaignsBySid;
+      if (!map.has(key)) map.set(key, new Set());
+      map.get(key).add(campaign);
+    };
     (prodData || []).forEach(r => {
-      const nm = (r.agent_nm || r.agent_name || "").trim();
-      const sid = (r.shyftoff_id || "").trim().toUpperCase();
-      if (sid) prodSids.add(sid);
+      const nm = (r.agent_nm || r.agent_name || r.full_name || "").trim();
+      const sid = (r.so_agent_id || r.shyftoff_id || "").trim().toUpperCase();
+      // Single campaign per row (JSON-format production exports)
+      const campaign = (r.campaign_nm || "").trim();
+      // Comma/semicolon-separated list (simple-format production agents)
+      const campaignList = (r.productive_campaigns_list || r.active_campaigns_list || "").trim();
+      const campaigns = campaign ? [campaign] : campaignList.split(/[;,]/).map(c => c.trim()).filter(Boolean);
+      if (sid) {
+        campaigns.forEach(c => addProdCampaign(sid, c));
+      }
+      // Also track by name key for agents without SID or for fallback matching
       const { first, last } = nameParts(nm);
-      prodKeys.add(nameKey(first, last));
+      const nk = nameKey(first, last);
+      campaigns.forEach(c => addProdCampaign(nk, c));
       const pp = nm.split(/\s+/).filter(Boolean);
       if (pp.length > 2) {
-        prodKeys.add(nameKey(pp.slice(0, -1).join(""), pp[pp.length - 1]));
+        const nk2 = nameKey(pp.slice(0, -1).join(""), pp[pp.length - 1]);
+        campaigns.forEach(c => addProdCampaign(nk2, c));
       }
     });
+    // Helper: is this agent in production for this specific campaign?
+    const isInProdForCampaign = (sid, key, campaign) => {
+      if (!campaign) return false;
+      const sidProdCampaigns = prodCampaignsBySid.get(sid?.toUpperCase() || "") || new Set();
+      const keyProdCampaigns = prodCampaignsByKey.get(key) || new Set();
+      return sidProdCampaigns.has(campaign) || keyProdCampaigns.has(campaign);
+    };
+    // Helper: get ALL campaigns this agent is in production for
+    const getProdCampaigns = (sid, key) => {
+      const sidSet = prodCampaignsBySid.get(sid?.toUpperCase() || "") || new Set();
+      const keySet = prodCampaignsByKey.get(key) || new Set();
+      return [...new Set([...sidSet, ...keySet])];
+    };
 
     // People Report: who has a Litmos account (= has credentials)
     // Track name → usernames so we can detect collisions (multiple people with same name)
@@ -481,8 +513,14 @@ export default function ProductionReadinessChecker() {
       const key = nameKey(first, last);
       const parts = name.split(/\s+/).filter(Boolean);
 
-      // Exclude production agents (by name key or ShyftOff ID)
-      if (prodKeys.has(key) || prodSids.has(sid.toUpperCase())) return;
+      // Campaign-aware production exclusion: only skip if the agent is in production
+      // FOR THIS ROW'S SPECIFIC CAMPAIGN. An agent can be in prod for Bilingual but
+      // still active in the pipeline for ENG (and vice versa).
+      const rowCampaign = (row.campaign_nm || "").trim();
+      const prodCampaignsForAgent = getProdCampaigns(sid, key);
+      if (rowCampaign && isInProdForCampaign(sid, key, rowCampaign)) return;
+      // If no campaign info on this row, fall back to old behavior: exclude if in ANY prod
+      if (!rowCampaign && prodCampaignsForAgent.length > 0) return;
 
       const ldata = findLitmos(name);
 
@@ -643,6 +681,7 @@ export default function ProductionReadinessChecker() {
         readyStatus, allLitmos,
         inLitmos, hasCcaas, missingCcaas, bgStatus, bgCleared,
         hasNameCollision, collidingUsernames,
+        rowCampaign, prodCampaigns: prodCampaignsForAgent,
         daysSinceChange, daysSinceCreated,
         createdAtRaw: row.created_at || "",
         lastChangedRaw: lastChanged,
@@ -708,6 +747,13 @@ export default function ProductionReadinessChecker() {
       // Fall back to aggregate integer
       const certPct = certRaw.match(/^\d+$/) ? parseInt(certRaw) : null;
 
+      // Campaigns this agent is in production for
+      const campaignList = (r.productive_campaigns_list || r.active_campaigns_list || "").trim();
+      const singleCampaign = (r.campaign_nm || "").trim();
+      const campaigns = singleCampaign
+        ? [singleCampaign]
+        : campaignList.split(/[;,]/).map(c => c.trim()).filter(Boolean);
+
       return {
         name, sid, isProd: true,
         certPct: certPct !== null ? certPct : (flBlueDone !== null ? null : null),
@@ -717,6 +763,7 @@ export default function ProductionReadinessChecker() {
         allCoursesDone: certPct === 100,
         status: r.agent_campaign_status || r.status || "Production",
         bgStatus: (r.background_check_status || "").trim().toLowerCase(),
+        prodCampaigns: campaigns,
       };
     });
   }, [prodData]);
@@ -764,6 +811,9 @@ export default function ProductionReadinessChecker() {
     if (filter === "name_collision") out = out.filter(a => a.hasNameCollision);
     if (filter === "flblue_done") out = out.filter(a => a.flBlueDone);
     if (filter === "flblue_incomplete") out = out.filter(a => !a.flBlueDone);
+    if (filter === "campaign_eng") out = out.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign));
+    if (filter === "campaign_bi") out = out.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign));
+    if (filter === "campaign_both") out = out.filter(a => a.rowCampaign && /nations/i.test(a.rowCampaign) && a.prodCampaigns && a.prodCampaigns.length > 0);
     if (search) {
       const s = search.toLowerCase();
       out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s) || (a.nbEmail || "").toLowerCase().includes(s));
@@ -793,6 +843,10 @@ export default function ProductionReadinessChecker() {
       nameCollisions: results.filter(a => a.hasNameCollision).length,
       flBlueDone: results.filter(a => a.flBlueDone).length,
       flBlueIncomplete: results.filter(a => !a.flBlueDone).length,
+      engPipeline: results.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign)).length,
+      biPipeline: results.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign)).length,
+      crossoverEngReady: results.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign) && a.readyStatus === "ready" && a.prodCampaigns && a.prodCampaigns.some(c => /bilingual/i.test(c))).length,
+      crossoverBiReady: results.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign) && a.readyStatus === "ready" && a.prodCampaigns && a.prodCampaigns.some(c => !/bilingual/i.test(c) && /nations/i.test(c))).length,
     };
   }, [results]);
 
@@ -1073,7 +1127,7 @@ export default function ProductionReadinessChecker() {
         {hasData && stats && (
           <>
             <div className="grid grid-cols-5 gap-3 mb-5">
-              <StatCard label="Pipeline Total" value={stats.total} sub="Agents in pipeline (excl. production)" color="#E8DFF6" />
+              <StatCard label="Pipeline Total" value={stats.total} sub={`${stats.engPipeline} ENG • ${stats.biPipeline} BI`} color="#E8DFF6" />
               <StatCard label="Production Ready" value={stats.ready} sub="All 3 pillars complete" color="#4ade80" />
               <StatCard label="Litmos Complete" value={stats.litmosDone} sub="14/14 required courses" color="#8F68D3" />
               <StatCard label="ShyftOff Cert" value={stats.shyftoffDone} sub="100% certification progress" color="#FF66C4" />
@@ -1264,6 +1318,9 @@ export default function ProductionReadinessChecker() {
                   { key: "ready", label: "Ready" },
                   { key: "partial", label: "In Progress" },
                   { key: "missing", label: "Not Started" },
+                  { key: "campaign_eng", label: "ENG" },
+                  { key: "campaign_bi", label: "BI" },
+                  { key: "campaign_both", label: "Both" },
                   { key: "production", label: "Production" },
                 ].map(f => (
                   <button key={f.key} onClick={() => setFilter(f.key)}
@@ -1304,7 +1361,20 @@ export default function ProductionReadinessChecker() {
                         <td className="px-3 py-2.5">
                           <div className="flex items-center gap-2">
                             <div className="font-semibold">{a.name}</div>
-                            {a.isProd && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#794EC2", color: "#E8DFF6", fontSize: 10 }}>PROD</span>}
+                            {/* Campaign tag: which NB campaign this row is for (ENG or BI) */}
+                            {!a.isProd && a.rowCampaign && /bilingual/i.test(a.rowCampaign) && (
+                              <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#794EC2", color: "#E8DFF6", fontSize: 10 }}>BI</span>
+                            )}
+                            {!a.isProd && a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign) && (
+                              <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#8F68D3", fontSize: 10 }}>ENG</span>
+                            )}
+                            {/* If they're ALREADY in prod for another campaign, surface that */}
+                            {!a.isProd && a.prodCampaigns && a.prodCampaigns.length > 0 && (
+                              <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#1a4d2e", color: "#4ade80", fontSize: 10 }} title={"Already in production for: " + a.prodCampaigns.join(", ")}>
+                                PROD: {a.prodCampaigns.some(c => /bilingual/i.test(c)) ? "BI" : ""}{a.prodCampaigns.some(c => /bilingual/i.test(c)) && a.prodCampaigns.some(c => !/bilingual/i.test(c) && /nations/i.test(c)) ? "+" : ""}{a.prodCampaigns.some(c => !/bilingual/i.test(c) && /nations/i.test(c)) ? "ENG" : ""}
+                              </span>
+                            )}
+                            {a.isProd && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#794EC2", color: "#E8DFF6", fontSize: 10 }}>PROD{a.prodCampaigns && a.prodCampaigns.length > 0 ? " " + (a.prodCampaigns.some(c => /bilingual/i.test(c)) && a.prodCampaigns.some(c => !/bilingual/i.test(c) && /nations/i.test(c)) ? "BI+ENG" : a.prodCampaigns.some(c => /bilingual/i.test(c)) ? "BI" : "ENG") : ""}</span>}
                             <button
                               onClick={(e) => handleCopyAgent(a, idx, e)}
                               className="opacity-0 group-hover:opacity-100 transition-opacity px-1.5 py-0.5 rounded text-xs"
