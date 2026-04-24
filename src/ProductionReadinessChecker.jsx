@@ -279,7 +279,7 @@ export default function ProductionReadinessChecker() {
   const [filter, setFilter] = useState("all");
   const [expandedRow, setExpandedRow] = useState(null);
   const [showEmail, setShowEmail] = useState(false);
-  const [openSections, setOpenSections] = useState(new Set(["flblue", "health"]));
+  const [openSections, setOpenSections] = useState(new Set(["outreach", "health", "creds"]));
   const [copiedIdx, setCopiedIdx] = useState(null);
   const [showDetailCols, setShowDetailCols] = useState(false);
 
@@ -667,6 +667,9 @@ export default function ProductionReadinessChecker() {
       const isCredsRequestedNoCourses = isCredentialsRequested && !rosterCoursesDone && !inLitmos && !hasNameCollision;
       // Creds requested, courses done, BG cleared, but already in Litmos = already credentialed
       const isAlreadyCredentialed = isCredentialsRequested && inLitmos;
+      // Outreach target: completed all ShyftOff courses but didn't attend the live Nav Meeting.
+      // Reach out to encourage attendance — the only thing blocking their readiness.
+      const needsNavOutreach = shyftoffComplete && (navData && navData.length > 0) && !navAttended;
 
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
       // Split stale into: in credentials queue vs truly stale (only agents with cleared BG)
@@ -709,7 +712,7 @@ export default function ProductionReadinessChecker() {
         lastChangedRaw: lastChanged,
         isNesting, isRoster, isCredentialsRequested, shyftoffStaleLevel,
         cipBgProcess, cipBgReport, isBgMismatch,
-        isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed,
+        isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed, needsNavOutreach,
         isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
         credentialNote,
       });
@@ -831,8 +834,7 @@ export default function ProductionReadinessChecker() {
     if (filter === "stale_bg") out = out.filter(a => a.isBgMismatch);
     if (filter === "account_issues") out = out.filter(a => a.hasAccountIssue);
     if (filter === "name_collision") out = out.filter(a => a.hasNameCollision);
-    if (filter === "flblue_done") out = out.filter(a => a.flBlueDone);
-    if (filter === "flblue_incomplete") out = out.filter(a => !a.flBlueDone);
+    if (filter === "needs_nav") out = out.filter(a => a.needsNavOutreach);
     if (filter === "campaign_eng") out = out.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign));
     if (filter === "campaign_bi") out = out.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign));
     if (filter === "campaign_both") out = out.filter(a => a.rowCampaign && /nations/i.test(a.rowCampaign) && a.prodCampaigns && a.prodCampaigns.length > 0);
@@ -865,6 +867,7 @@ export default function ProductionReadinessChecker() {
       staleBgMismatch: results.filter(a => a.isBgMismatch).length,
       accountIssues: results.filter(a => a.hasAccountIssue).length,
       nameCollisions: results.filter(a => a.hasNameCollision).length,
+      needsNavOutreach: results.filter(a => a.needsNavOutreach).length,
       flBlueDone: results.filter(a => a.flBlueDone).length,
       flBlueIncomplete: results.filter(a => !a.flBlueDone).length,
       engPipeline: results.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign)).length,
@@ -960,58 +963,6 @@ export default function ProductionReadinessChecker() {
     rows.sort((a, b) => a[0].localeCompare(b[0]));
     downloadCsv(headers, rows, `pipeline_issues_${today}.csv`);
   };
-
-  const handleExportFlBlue = () => {
-    const today = new Date().toISOString().split("T")[0];
-    const headers = ["Group","Agent Name","ShyftOff ID","Status","Cert Progress %","FL Blue Status","BG Status"];
-    const rows = [];
-    // Production agents
-    prodAgents.forEach(a => {
-      rows.push([
-        "Production", a.name, a.sid, a.status, a.certPct !== null ? a.certPct : "N/A",
-        a.flBlueDone === true ? "Complete" : a.flBlueDone === false ? "Not Done" : a.allCoursesDone ? "All Done (cert 100%)" : "No Data",
-        a.bgStatus || "N/A",
-      ]);
-    });
-    // Pipeline agents
-    if (results) {
-      results.forEach(a => {
-        rows.push([
-          "Pipeline", a.name, a.sid, a.status, a.shyftoffPct !== null ? a.shyftoffPct : "N/A",
-          a.flBlueDone ? "Complete" : "Incomplete",
-          a.bgStatus || "N/A",
-        ]);
-      });
-    }
-    rows.sort((a, b) => {
-      if (a[0] !== b[0]) return a[0].localeCompare(b[0]);
-      return a[4] === "Complete" ? 1 : -1; // Incomplete first
-    });
-    downloadCsv(headers, rows, `fl_blue_uptraining_${today}.csv`);
-  };
-
-  const flBlueSummaryText = useMemo(() => {
-    if (!prodStats && !stats) return "";
-    const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-    let text = `FL Blue 2026 Uptraining Summary — ${today}\n\n`;
-    if (prodStats) {
-      const pct = Math.round(prodStats.flBlueDone / prodStats.total * 100);
-      text += `PRODUCTION AGENTS (${prodStats.total})\n`;
-      if (prodStats.hasFlBlueData) {
-        text += `• FL Blue Complete: ${prodStats.flBlueDone} (${pct}%)\n`;
-        text += `• FL Blue Not Done: ${prodStats.flBlueNotDone}\n\n`;
-      } else {
-        text += `• All Courses Done (cert 100%): ${prodStats.total - prodStats.noData}\n`;
-        text += `• No per-course data — upload production-export files for FL Blue detail\n\n`;
-      }
-    }
-    if (stats) {
-      text += `PIPELINE AGENTS (${stats.total})\n`;
-      text += `• Done: ${stats.flBlueDone}\n`;
-      text += `• Not Done: ${stats.flBlueIncomplete}\n`;
-    }
-    return text;
-  }, [prodStats, stats]);
 
   const emailBody = useMemo(() => {
     if (!stats || !results) return "";
@@ -1161,80 +1112,26 @@ export default function ProductionReadinessChecker() {
               <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#FFE566" : "#5c3d7a"} />
             </div>
 
-            {/* === SECTION: FL Blue Uptraining === */}
+            {/* === SECTION: Outreach === */}
             <div className="mb-3 rounded-xl overflow-hidden" style={{ border: "1px solid #3d2057" }}>
-              <button onClick={() => toggleSection("flblue")} className="w-full flex items-center justify-between px-4 py-2.5 transition-all hover:brightness-110" style={{ background: "#1a0d2e" }}>
+              <button onClick={() => toggleSection("outreach")} className="w-full flex items-center justify-between px-4 py-2.5 transition-all hover:brightness-110" style={{ background: "#1a0d2e" }}>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs" style={{ color: "#7a5f9a" }}>{openSections.has("flblue") ? "▾" : "▸"}</span>
-                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>FL Blue 2026 Uptraining</span>
+                  <span className="text-xs" style={{ color: "#7a5f9a" }}>{openSections.has("outreach") ? "▾" : "▸"}</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Outreach</span>
                 </div>
-                <div className="flex items-center gap-3 text-xs" style={{ color: "#5c3d7a" }}>
-                  {prodStats && <span>Production: {prodStats.hasFlBlueData ? prodStats.flBlueDone : "?"}/{prodStats.total} FL Blue done</span>}
-                  <span>Pipeline: {stats.flBlueDone}/{stats.total} complete</span>
+                <div className="text-xs" style={{ color: stats.needsNavOutreach > 0 ? "#FFE566" : "#5c3d7a" }}>
+                  {stats.needsNavOutreach} need Nav
                 </div>
               </button>
-              {openSections.has("flblue") && (
+              {openSections.has("outreach") && (
                 <div className="px-4 py-3" style={{ background: "#27133A" }}>
-                  {/* Production agents */}
-                  {prodStats && (
-                    <div className="mb-3">
-                      <div className="text-xs font-semibold mb-2" style={{ color: "#7a5f9a" }}>Production Agents ({prodStats.total}){!prodStats.hasFlBlueData && <span style={{ color: "#5c3d7a" }}> — upload production-export files for per-course FL Blue data</span>}</div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button onClick={() => setFilter(filter === "production" ? "all" : "production")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "production" ? "#1a4d2e44" : "#1a4d2e22", border: `1px solid ${filter === "production" ? "#4ade80" : "#1a4d2e"}` }}>
-                          <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-xs font-bold" style={{ color: "#4ade80" }}>FL Blue Complete</span>
-                            <span className="text-xl font-black" style={{ color: "#4ade80" }}>{prodStats.hasFlBlueData ? prodStats.flBlueDone : prodStats.total - prodStats.noData + " (cert 100%)"}</span>
-                          </div>
-                          <div className="text-xs" style={{ color: "#5c3d7a" }}>{prodStats.hasFlBlueData ? "Confirmed from per-course data." : "Based on aggregate cert only."}</div>
-                        </button>
-                        <button onClick={() => setFilter(filter === "prod_flblue_incomplete" ? "all" : "prod_flblue_incomplete")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "prod_flblue_incomplete" ? "#FF786622" : "#FF786611", border: `1px solid ${filter === "prod_flblue_incomplete" ? "#FF7866" : "#4D1F3B"}` }}>
-                          <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-xs font-bold" style={{ color: "#FF7866" }}>FL Blue Not Done</span>
-                            <span className="text-xl font-black" style={{ color: "#FF7866" }}>{prodStats.hasFlBlueData ? prodStats.flBlueNotDone : prodStats.noData}</span>
-                          </div>
-                          <div className="text-xs" style={{ color: "#5c3d7a" }}>{prodStats.hasFlBlueData ? "Confirmed from per-course data." : "No per-course data available."}</div>
-                        </button>
-                      </div>
-                      {/* Progress bar */}
-                      {prodStats.hasFlBlueData && (
-                      <div className="flex items-center gap-3 mt-2">
-                        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: "#3d2057" }}>
-                          <div className="h-full rounded-full" style={{ width: `${Math.round(prodStats.flBlueDone / prodStats.total * 100)}%`, background: "#4ade80" }} />
-                        </div>
-                        <span className="text-xs font-bold" style={{ color: "#b8a5d4", fontFamily: "'IBM Plex Mono', monospace" }}>{Math.round(prodStats.flBlueDone / prodStats.total * 100)}%</span>
-                      </div>
-                      )}
+                  <button onClick={() => setFilter(filter === "needs_nav" ? "all" : "needs_nav")} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "needs_nav" ? "#FFE56622" : "#FFE56611", border: `1px solid ${filter === "needs_nav" ? "#FFE566" : "#3d2057"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-sm font-bold" style={{ color: "#FFE566" }}>Needs Nav Meeting</span>
+                      <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.needsNavOutreach}</span>
                     </div>
-                  )}
-                  {/* Pipeline agents — Done vs Not Done */}
-                  <div>
-                    <div className="text-xs font-semibold mb-2" style={{ color: "#7a5f9a" }}>Pipeline Agents ({stats.total})</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button onClick={() => setFilter(filter === "flblue_done" ? "all" : "flblue_done")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "flblue_done" ? "#1a4d2e44" : "#1a4d2e22", border: `1px solid ${filter === "flblue_done" ? "#4ade80" : "#1a4d2e"}` }}>
-                        <div className="flex items-center justify-between mb-0.5">
-                          <span className="text-xs font-bold" style={{ color: "#4ade80" }}>Done</span>
-                          <span className="text-xl font-black" style={{ color: "#4ade80" }}>{stats.flBlueDone}</span>
-                        </div>
-                        <div className="text-xs" style={{ color: "#5c3d7a" }}>FL Blue uptraining completed.</div>
-                      </button>
-                      <button onClick={() => setFilter(filter === "flblue_incomplete" ? "all" : "flblue_incomplete")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "flblue_incomplete" ? "#FF786622" : "#FF786611", border: `1px solid ${filter === "flblue_incomplete" ? "#FF7866" : "#4D1F3B"}` }}>
-                        <div className="flex items-center justify-between mb-0.5">
-                          <span className="text-xs font-bold" style={{ color: "#FF7866" }}>Not Done</span>
-                          <span className="text-xl font-black" style={{ color: "#FF7866" }}>{stats.flBlueIncomplete}</span>
-                        </div>
-                        <div className="text-xs" style={{ color: "#5c3d7a" }}>FL Blue not yet completed.</div>
-                      </button>
-                    </div>
-                  </div>
-                  {/* FL Blue actions */}
-                  <div className="flex gap-2 mt-3 pt-3" style={{ borderTop: "1px solid #3d2057" }}>
-                    <button onClick={handleExportFlBlue} className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#3d2057", color: "#b8a5d4" }}>
-                      Export FL Blue CSV
-                    </button>
-                    <button onClick={() => { navigator.clipboard.writeText(flBlueSummaryText); }} className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#3d2057", color: "#b8a5d4" }}>
-                      Copy Summary
-                    </button>
-                  </div>
+                    <div className="text-xs" style={{ color: "#b8a5d4" }}>Completed all ShyftOff courses but missed the live Navigation Meeting. Reach out to encourage attendance.</div>
+                  </button>
                 </div>
               )}
             </div>
@@ -1423,9 +1320,6 @@ export default function ProductionReadinessChecker() {
             {a.hasNameCollision && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#FF66C4", fontSize: 10 }}>⚠ NAME COLLISION</span>}
                           </div>
                           )}
-                          {a.isProd && a.flBlueDone === false && (
-                            <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#4D1F3B", color: "#FF7866", fontSize: 10 }}>FL BLUE NOT DONE</span>
-                          )}
                         </td>
                         <td className="px-3 py-2.5 text-xs" style={{ color: "#b8a5d4" }}>{a.status}</td>
                         <td className="px-3 py-2.5 text-center">
@@ -1466,7 +1360,7 @@ export default function ProductionReadinessChecker() {
                           }
                         </td>
                         <td className="px-3 py-2.5 text-center">{a.isProd
-                          ? <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: a.flBlueDone === true ? "#1a4d2e" : a.flBlueDone === false ? "#4D1F3B" : "#3d2057", color: a.flBlueDone === true ? "#4ade80" : a.flBlueDone === false ? "#FF7866" : "#b8a5d4" }}>{a.flBlueDone === true ? "FL BLUE ✓" : a.flBlueDone === false ? "FL BLUE ✗" : `CERT ${a.certPct}%`}</span>
+                          ? <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: a.allCoursesDone ? "#1a4d2e" : "#3d2057", color: a.allCoursesDone ? "#4ade80" : "#b8a5d4" }}>{a.allCoursesDone ? "COMPLETE" : `CERT ${a.certPct !== null ? a.certPct + "%" : "?"}`}</span>
                           : <Badge type={a.readyStatus} />
                         }</td>
                       </tr>
@@ -1530,8 +1424,8 @@ export default function ProductionReadinessChecker() {
                 {/* Banner — different for prod vs pipeline */}
                 {ag.isProd ? (
                   <div className="px-4 py-2.5" style={{ background: ag.certPct === 100 ? "#1a4d2e33" : "#3d300033", borderBottom: "1px solid #3d2057" }}>
-                    <span className="text-sm font-semibold" style={{ color: ag.flBlueDone === true ? "#4ade80" : ag.flBlueDone === false ? "#FF7866" : "#b8a5d4" }}>
-                      {ag.flBlueDone === true ? "FL Blue complete" : ag.flBlueDone === false ? "FL Blue not done" : ag.allCoursesDone ? "All courses done" : `Cert ${ag.certPct}%`}
+                    <span className="text-sm font-semibold" style={{ color: ag.allCoursesDone ? "#4ade80" : "#b8a5d4" }}>
+                      {ag.allCoursesDone ? "All courses complete" : `Cert ${ag.certPct !== null ? ag.certPct + "%" : "unknown"}`}
                     </span>
                   </div>
                 ) : (
@@ -1567,12 +1461,6 @@ export default function ProductionReadinessChecker() {
                     <div className="flex justify-between">
                       <span style={{ color: "#7a5f9a" }}>Certification Progress</span>
                       <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: ag.certPct === 100 ? "#4ade80" : "#FFE566" }}>{ag.certPct}%</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span style={{ color: "#7a5f9a" }}>FL Blue Status</span>
-                      <span style={{ color: ag.flBlueDone === true ? "#4ade80" : ag.flBlueDone === false ? "#FF7866" : "#b8a5d4" }}>
-                        {ag.flBlueDone === true ? `✓ Complete${ag.flBluePct !== null ? "" : ""}` : ag.flBlueDone === false ? `✗ Not done${ag.flBluePct !== null ? ` (${ag.flBluePct}%)` : ""}` : ag.allCoursesDone ? "✓ All courses done (cert 100%)" : "No per-course data"}
-                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span style={{ color: "#7a5f9a" }}>BG Check</span>
