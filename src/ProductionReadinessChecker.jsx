@@ -933,40 +933,26 @@ export default function ProductionReadinessChecker() {
       "Has Credentials (Litmos)","Cert Progress %",
       "NB Cert Done","FL Blue Done","Days in Status","Action Needed"
     ];
-    const rows = issueAgents.map(a => {
-      let issueType = "";
-      let action = "";
-      if (a.isBgMismatch) {
-        issueType = "BG Data Mismatch";
-        action = "Roster shows cleared but CIP shows In Progress. Investigate BG check system sync.";
-      } else if (a.hasAccountIssue) {
-        issueType = "BG Pending/Created";
-        action = "Background check not cleared. Agent blocked from progressing.";
-      } else if (a.isGhost) {
-        issueType = "Nesting Without Credentials";
-        action = "In Nesting status but no Litmos account. Needs credentialing or status correction.";
-      } else if (a.isTrulyStale) {
-        issueType = "Stale 3+ Weeks";
-        action = "Ready for credentials 3+ weeks but not processed. Manual investigation needed.";
-      } else if (a.isStaleInQueue) {
-        issueType = "Stale — In Queue";
-        action = "Credentials requested 3+ weeks ago. Check if batch was processed.";
-      } else if (a.hasNameCollision) {
-        issueType = "Name Collision";
-        action = `Multiple Litmos accounts share this name: ${(a.collidingUsernames || []).join(", ")}. Verify manually before credentialing.`;
-      } else if (a.needsNestingBump) {
-        issueType = "Needs Nesting Bump";
-        action = "Agent is in a Roster status but already has Litmos credentials. Move to 'Nesting - First Call' so they can access the pre-production course.";
-      }
-      return [
-        issueType, a.name, a.sid, a.status,
-        a.bgStatus || "N/A", a.cipBgProcess || "N/A", a.cipBgReport || "N/A",
-        a.inLitmos ? "YES" : "NO",
-        a.shyftoffPct !== null ? a.shyftoffPct : "N/A",
-        a.nbCertDone ? "YES" : "NO", a.flBlueDone ? "YES" : "NO",
-        a.daysSinceChange !== null ? a.daysSinceChange : "N/A",
-        action,
-      ];
+    // Emit one row per issue per agent — an agent with multiple issues
+    // (e.g. BG Mismatch AND Needs Nesting Bump) appears in each category.
+    // Filter by "Issue Type" in Excel to get each group cleanly.
+    const rows = [];
+    const baseFields = (a) => [
+      a.name, a.sid, a.status,
+      a.bgStatus || "N/A", a.cipBgProcess || "N/A", a.cipBgReport || "N/A",
+      a.inLitmos ? "YES" : "NO",
+      a.shyftoffPct !== null ? a.shyftoffPct : "N/A",
+      a.nbCertDone ? "YES" : "NO", a.flBlueDone ? "YES" : "NO",
+      a.daysSinceChange !== null ? a.daysSinceChange : "N/A",
+    ];
+    issueAgents.forEach(a => {
+      if (a.needsNestingBump) rows.push(["Needs Nesting Bump", ...baseFields(a), "Agent is in a Roster status but already has Litmos credentials. Move to 'Nesting - First Call' so they can access the pre-production course."]);
+      if (a.isBgMismatch) rows.push(["BG Data Mismatch", ...baseFields(a), "Roster shows cleared but CIP shows In Progress. Investigate BG check system sync."]);
+      if (a.hasAccountIssue) rows.push(["BG Pending/Created", ...baseFields(a), "Background check not cleared. Agent blocked from progressing."]);
+      if (a.isGhost) rows.push(["Nesting Without Credentials", ...baseFields(a), "In Nesting status but no Litmos account. Needs credentialing or status correction."]);
+      if (a.isTrulyStale) rows.push(["Stale 3+ Weeks", ...baseFields(a), "Ready for credentials 3+ weeks but not processed. Manual investigation needed."]);
+      if (a.isStaleInQueue) rows.push(["Stale — In Queue", ...baseFields(a), "Credentials requested 3+ weeks ago. Check if batch was processed."]);
+      if (a.hasNameCollision) rows.push(["Name Collision", ...baseFields(a), `Multiple Litmos accounts share this name: ${(a.collidingUsernames || []).join(", ")}. Verify manually before credentialing.`]);
     });
     // Sort by issue type so BG mismatches are grouped together
     rows.sort((a, b) => a[0].localeCompare(b[0]));
