@@ -670,6 +670,10 @@ export default function ProductionReadinessChecker() {
       // Outreach target: completed all ShyftOff courses but didn't attend the live Nav Meeting.
       // Reach out to encourage attendance — the only thing blocking their readiness.
       const needsNavOutreach = shyftoffComplete && (navData && navData.length > 0) && !navAttended;
+      // Action target: agent is in any Roster status but ALREADY has Litmos credentials.
+      // They need to be manually bumped to "Nesting - First Call" so they can access the
+      // pre-production course (which is only visible in Nesting).
+      const needsNestingBump = isRoster && inLitmos && !hasNameCollision;
 
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
       // Split stale into: in credentials queue vs truly stale (only agents with cleared BG)
@@ -712,7 +716,7 @@ export default function ProductionReadinessChecker() {
         lastChangedRaw: lastChanged,
         isNesting, isRoster, isCredentialsRequested, shyftoffStaleLevel,
         cipBgProcess, cipBgReport, isBgMismatch,
-        isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed, needsNavOutreach,
+        isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed, needsNavOutreach, needsNestingBump,
         isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
         credentialNote,
       });
@@ -835,6 +839,7 @@ export default function ProductionReadinessChecker() {
     if (filter === "account_issues") out = out.filter(a => a.hasAccountIssue);
     if (filter === "name_collision") out = out.filter(a => a.hasNameCollision);
     if (filter === "needs_nav") out = out.filter(a => a.needsNavOutreach);
+    if (filter === "needs_bump") out = out.filter(a => a.needsNestingBump);
     if (filter === "campaign_eng") out = out.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign));
     if (filter === "campaign_bi") out = out.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign));
     if (filter === "campaign_both") out = out.filter(a => a.rowCampaign && /nations/i.test(a.rowCampaign) && a.prodCampaigns && a.prodCampaigns.length > 0);
@@ -868,6 +873,7 @@ export default function ProductionReadinessChecker() {
       accountIssues: results.filter(a => a.hasAccountIssue).length,
       nameCollisions: results.filter(a => a.hasNameCollision).length,
       needsNavOutreach: results.filter(a => a.needsNavOutreach).length,
+      needsNestingBump: results.filter(a => a.needsNestingBump).length,
       flBlueDone: results.filter(a => a.flBlueDone).length,
       flBlueIncomplete: results.filter(a => !a.flBlueDone).length,
       engPipeline: results.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign)).length,
@@ -918,7 +924,7 @@ export default function ProductionReadinessChecker() {
 
   const handleExportIssues = () => {
     if (!results) return;
-    const issueAgents = results.filter(a => a.isBgMismatch || a.hasAccountIssue || a.isGhost || a.isTrulyStale || a.isStaleInQueue || a.hasNameCollision);
+    const issueAgents = results.filter(a => a.isBgMismatch || a.hasAccountIssue || a.isGhost || a.isTrulyStale || a.isStaleInQueue || a.hasNameCollision || a.needsNestingBump);
     if (!issueAgents.length) return;
     const today = new Date().toISOString().split("T")[0];
     const headers = [
@@ -948,6 +954,9 @@ export default function ProductionReadinessChecker() {
       } else if (a.hasNameCollision) {
         issueType = "Name Collision";
         action = `Multiple Litmos accounts share this name: ${(a.collidingUsernames || []).join(", ")}. Verify manually before credentialing.`;
+      } else if (a.needsNestingBump) {
+        issueType = "Needs Nesting Bump";
+        action = "Agent is in a Roster status but already has Litmos credentials. Move to 'Nesting - First Call' so they can access the pre-production course.";
       }
       return [
         issueType, a.name, a.sid, a.status,
@@ -1112,20 +1121,29 @@ export default function ProductionReadinessChecker() {
               <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#FFE566" : "#5c3d7a"} />
             </div>
 
-            {/* === SECTION: Outreach === */}
+            {/* === SECTION: Action Items === */}
             <div className="mb-3 rounded-xl overflow-hidden" style={{ border: "1px solid #3d2057" }}>
               <button onClick={() => toggleSection("outreach")} className="w-full flex items-center justify-between px-4 py-2.5 transition-all hover:brightness-110" style={{ background: "#1a0d2e" }}>
                 <div className="flex items-center gap-2">
                   <span className="text-xs" style={{ color: "#7a5f9a" }}>{openSections.has("outreach") ? "▾" : "▸"}</span>
-                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Outreach</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Action Items</span>
                 </div>
-                <div className="text-xs" style={{ color: stats.needsNavOutreach > 0 ? "#FFE566" : "#5c3d7a" }}>
-                  {stats.needsNavOutreach} need Nav
+                <div className="text-xs flex gap-3" style={{ color: "#5c3d7a" }}>
+                  <span style={{ color: stats.needsNestingBump > 0 ? "#FF66C4" : "#5c3d7a" }}>{stats.needsNestingBump} need Nesting bump</span>
+                  <span>•</span>
+                  <span style={{ color: stats.needsNavOutreach > 0 ? "#FFE566" : "#5c3d7a" }}>{stats.needsNavOutreach} need Nav</span>
                 </div>
               </button>
               {openSections.has("outreach") && (
-                <div className="px-4 py-3" style={{ background: "#27133A" }}>
-                  <button onClick={() => setFilter(filter === "needs_nav" ? "all" : "needs_nav")} className="w-full text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "needs_nav" ? "#FFE56622" : "#FFE56611", border: `1px solid ${filter === "needs_nav" ? "#FFE566" : "#3d2057"}` }}>
+                <div className="px-4 py-3 grid grid-cols-2 gap-2" style={{ background: "#27133A" }}>
+                  <button onClick={() => setFilter(filter === "needs_bump" ? "all" : "needs_bump")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "needs_bump" ? "#FF66C422" : "#FF66C411", border: `1px solid ${filter === "needs_bump" ? "#FF66C4" : "#794EC2"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-sm font-bold" style={{ color: "#FF66C4" }}>Needs Nesting Bump</span>
+                      <span className="text-2xl font-black" style={{ color: "#FF66C4" }}>{stats.needsNestingBump}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#b8a5d4" }}>In a Roster status but already has Litmos credentials. Manually move to "Nesting - First Call" so they can access pre-production.</div>
+                  </button>
+                  <button onClick={() => setFilter(filter === "needs_nav" ? "all" : "needs_nav")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "needs_nav" ? "#FFE56622" : "#FFE56611", border: `1px solid ${filter === "needs_nav" ? "#FFE566" : "#3d2057"}` }}>
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-sm font-bold" style={{ color: "#FFE566" }}>Needs Nav Meeting</span>
                       <span className="text-2xl font-black" style={{ color: "#FFE566" }}>{stats.needsNavOutreach}</span>
@@ -1318,6 +1336,7 @@ export default function ProductionReadinessChecker() {
                             {a.isBgMismatch && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d3000", color: "#FFE566", fontSize: 10 }}>BG MISMATCH{a.daysSinceChange !== null ? ` ${a.daysSinceChange}d` : ""}</span>}
             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
             {a.hasNameCollision && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#FF66C4", fontSize: 10 }}>⚠ NAME COLLISION</span>}
+            {a.needsNestingBump && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#794EC2", color: "#FF66C4", fontSize: 10 }}>NEEDS NESTING BUMP</span>}
                           </div>
                           )}
                         </td>
