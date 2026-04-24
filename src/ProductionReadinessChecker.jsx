@@ -1126,7 +1126,7 @@ export default function ProductionReadinessChecker() {
           <FileUpload label="Litmos People Report" sublabel="Required — Who has a Litmos account" onFiles={f => setPeopleFiles(f)} multiple={false} files={peopleFiles} />
           <FileUpload label="Nesting / CIP Export" sublabel="Required — Dashboard or CIP agent export" onFiles={f => setCipFiles(f)} multiple files={cipFiles} />
           <FileUpload label="Production Exports" sublabel="Optional — Exclude current prod agents" onFiles={f => setProdFiles(f)} multiple files={prodFiles} />
-          <FileUpload label="Nav Meeting Tracker" sublabel="Optional — ShyftNav export or legacy Name/Email CSV" onFiles={f => setNavFiles(f)} multiple={false} files={navFiles} />
+          <FileUpload label="Nav Meeting Tracker" sublabel="Optional — Upload multiple ShyftNav exports. Duplicates auto-deduped." onFiles={f => setNavFiles(f)} multiple files={navFiles} />
         </div>
 
         <div className="flex gap-2 mb-5">
