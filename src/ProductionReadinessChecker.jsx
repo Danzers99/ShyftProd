@@ -966,6 +966,60 @@ export default function ProductionReadinessChecker() {
     downloadCsv(headers, rows, `pipeline_issues_${today}.csv`);
   };
 
+  // Dedicated export for the recurring "Needs Nesting Bump" report.
+  // Format matches what Ops Manager expects: Campaign, Agent Name, ShyftOff ID,
+  // Current Status, BG Check Status (with cross-source mismatch detail), Action.
+  // Sorted by Campaign (ENG → Bilingual → Both), then alphabetically by name.
+  const handleExportNestingBump = () => {
+    if (!results) return;
+    const bumpAgents = results.filter(a => a.needsNestingBump);
+    if (!bumpAgents.length) return;
+    const today = new Date().toISOString().split("T")[0];
+    const headers = ["Campaign","Agent Name","ShyftOff ID","Current Status","BG Check Status","Action"];
+
+    const labelCampaign = (a) => {
+      // Determine campaign(s) the agent appears in
+      const c = (a.rowCampaign || "").toLowerCase();
+      const prodCs = (a.prodCampaigns || []).map(x => x.toLowerCase());
+      const allCs = [c, ...prodCs];
+      const hasEng = allCs.some(x => x && x.includes("nations") && !x.includes("bilingual"));
+      const hasBi = allCs.some(x => x && x.includes("bilingual"));
+      if (hasEng && hasBi) return "Both ENG + Bilingual";
+      if (hasBi) return "Bilingual";
+      if (hasEng) return "ENG";
+      return "Unknown";
+    };
+
+    const labelBg = (a) => {
+      const simpleCleared = (a.bgStatus || "").toLowerCase() === "cleared";
+      const cipReport = (a.cipBgReport || "").toLowerCase();
+      const cipProcess = (a.cipBgProcess || "").toUpperCase();
+      const cipMismatch = cipProcess === "IN_PROGRESS" && cipReport && !["clear","proceed"].includes(cipReport);
+      if (simpleCleared && cipMismatch) return `MISMATCH (Roster: cleared, CIP: ${cipReport})`;
+      if (a.bgCleared) return "Cleared";
+      if (a.bgStatus) return a.bgStatus.charAt(0).toUpperCase() + a.bgStatus.slice(1);
+      return "Unknown";
+    };
+
+    const rows = bumpAgents.map(a => [
+      labelCampaign(a),
+      a.name,
+      a.sid,
+      a.status,
+      labelBg(a),
+      'Move to "Nesting - First Call"',
+    ]);
+
+    const order = { "ENG": 0, "Bilingual": 1, "Both ENG + Bilingual": 2, "Unknown": 3 };
+    rows.sort((x, y) => {
+      const co = (order[x[0]] ?? 99) - (order[y[0]] ?? 99);
+      if (co !== 0) return co;
+      return x[1].toLowerCase().localeCompare(y[1].toLowerCase());
+    });
+
+    downloadCsv(headers, rows, `needs_nesting_bump_by_campaign_${today}.csv`);
+  };
+
   const emailBody = useMemo(() => {
     if (!stats || !results) return "";
     const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
@@ -1129,13 +1183,20 @@ export default function ProductionReadinessChecker() {
               </button>
               {openSections.has("outreach") && (
                 <div className="px-4 py-3 grid grid-cols-2 gap-2" style={{ background: "#27133A" }}>
-                  <button onClick={() => setFilter(filter === "needs_bump" ? "all" : "needs_bump")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "needs_bump" ? "#FF66C422" : "#FF66C411", border: `1px solid ${filter === "needs_bump" ? "#FF66C4" : "#794EC2"}` }}>
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-sm font-bold" style={{ color: "#FF66C4" }}>Needs Nesting Bump</span>
-                      <span className="text-2xl font-black" style={{ color: "#FF66C4" }}>{stats.needsNestingBump}</span>
-                    </div>
-                    <div className="text-xs" style={{ color: "#b8a5d4" }}>In a Roster status but already has Litmos credentials. Manually move to "Nesting - First Call" so they can access pre-production.</div>
-                  </button>
+                  <div className="rounded-lg p-3" style={{ background: filter === "needs_bump" ? "#FF66C422" : "#FF66C411", border: `1px solid ${filter === "needs_bump" ? "#FF66C4" : "#794EC2"}` }}>
+                    <button onClick={() => setFilter(filter === "needs_bump" ? "all" : "needs_bump")} className="w-full text-left transition-all hover:brightness-110">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-sm font-bold" style={{ color: "#FF66C4" }}>Needs Nesting Bump</span>
+                        <span className="text-2xl font-black" style={{ color: "#FF66C4" }}>{stats.needsNestingBump}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>In a Roster status but already has Litmos credentials. Manually move to "Nesting - First Call" so they can access pre-production.</div>
+                    </button>
+                    {stats.needsNestingBump > 0 && (
+                      <button onClick={(e) => { e.stopPropagation(); handleExportNestingBump(); }} className="mt-2 px-2 py-1 rounded text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#FF66C4", color: "#27133A" }}>
+                        ↓ Export for Ops (CSV)
+                      </button>
+                    )}
+                  </div>
                   <button onClick={() => setFilter(filter === "needs_nav" ? "all" : "needs_nav")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "needs_nav" ? "#FFE56622" : "#FFE56611", border: `1px solid ${filter === "needs_nav" ? "#FFE566" : "#3d2057"}` }}>
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-sm font-bold" style={{ color: "#FFE566" }}>Needs Nav Meeting</span>
