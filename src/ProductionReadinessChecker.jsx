@@ -1,4 +1,6 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { saveSnapshot, loadSnapshot, clearSnapshot, isStale, formatLoadedTime, loadHistory, clearAllHistory } from "./utils/storage";
+import { identifyFile, validateSlot } from "./utils/schemaValidation";
 
 const REQUIRED_LITMOS = [
   "Anti-money Laundering Awareness 4.0 (US)",
@@ -213,12 +215,14 @@ function parseCertProgress(raw) {
   } catch { return { pct: null, map: {}, courseMap: {} }; }
 }
 
-function FileUpload({ label, sublabel, onFiles, multiple, files }) {
+function FileUpload({ label, sublabel, onFiles, multiple, files, validation }) {
   const ref = useRef();
+  // validation: { warnings: string[] } — surfaced from parent after schema check
+  const hasWarning = validation?.warnings?.length > 0;
   return (
     <div
       className="relative border border-dashed rounded-lg p-3 cursor-pointer transition-all hover:border-purple-400 hover:bg-purple-950/20"
-      style={{ borderColor: files?.length ? "#8F68D3" : "#4D1F3B" }}
+      style={{ borderColor: hasWarning ? "#FFE566" : files?.length ? "#8F68D3" : "#4D1F3B" }}
       onClick={() => ref.current?.click()}
     >
       <input ref={ref} type="file" accept=".csv" multiple={multiple}
@@ -232,6 +236,11 @@ function FileUpload({ label, sublabel, onFiles, multiple, files }) {
               {f.name}
             </span>
           ))}
+        </div>
+      )}
+      {hasWarning && (
+        <div className="mt-2 text-xs px-2 py-1 rounded" style={{ background: "#3d300033", border: "1px solid #FFE566", color: "#FFE566" }}>
+          ⚠ {validation.warnings.join(" · ")}
         </div>
       )}
     </div>
@@ -288,6 +297,114 @@ export default function ProductionReadinessChecker() {
   const [openSections, setOpenSections] = useState(new Set(["outreach", "health", "creds"]));
   const [copiedIdx, setCopiedIdx] = useState(null);
   const [showDetailCols, setShowDetailCols] = useState(false);
+  // Persistence state
+  const [savedAt, setSavedAt] = useState(null);
+  const [fileMeta, setFileMeta] = useState(null); // { litmos: [{name, size}], ... }
+  const [restoring, setRestoring] = useState(true);
+  const [fileTypes, setFileTypes] = useState({}); // slotKey → array of detected kinds
+
+  // Restore snapshot from IndexedDB on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await loadSnapshot();
+        if (snap && !cancelled) {
+          setLitmosData(snap.parsedData?.litmosData || null);
+          setCipData(snap.parsedData?.cipData || null);
+          setProdData(snap.parsedData?.prodData || null);
+          setNavData(snap.parsedData?.navData || null);
+          setPeopleData(snap.parsedData?.peopleData || null);
+          setSavedAt(snap.savedAt);
+          setFileMeta(snap.fileMeta || null);
+        }
+      } catch (e) {
+        console.error("Snapshot restore failed:", e);
+      } finally {
+        if (!cancelled) setRestoring(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Schema-check uploaded files and surface any slot mismatches as warnings.
+  // Doesn't block upload — user might have a legitimate reason to drop a file in
+  // an unexpected slot. Just gives them a heads-up.
+  const handleFiles = useCallback(async (slotKey, setter, files) => {
+    setter(files);
+    if (!files || !files.length) {
+      setFileTypes(prev => { const next = {...prev}; delete next[slotKey]; return next; });
+      return;
+    }
+    // Run schema check on each file's headers
+    const checks = await Promise.all(files.map(async f => {
+      try {
+        const text = await f.text();
+        const rows = parseCSV(text);
+        if (!rows.length) return { kind: "unknown", label: "Empty file", error: null };
+        const headers = Object.keys(rows[0]);
+        const detected = identifyFile(headers, rows[0]);
+        const error = validateSlot(slotKey, detected.kind);
+        return { ...detected, error, fileName: f.name };
+      } catch (e) {
+        return { kind: "unknown", label: "Parse failed", error: "Couldn't read file", fileName: f.name };
+      }
+    }));
+    const warnings = checks.filter(c => c.error).map(c => `${c.fileName}: ${c.error} (looks like ${c.label})`);
+    setFileTypes(prev => ({ ...prev, [slotKey]: { checks, warnings } }));
+  }, []);
+
+  const handleClearCache = useCallback(async (clearHistoryToo = false) => {
+    const msg = clearHistoryToo
+      ? "Clear ALL cached data including 30-day history? This cannot be undone."
+      : "Clear cached data? You'll need to re-upload your files. (History is preserved.)";
+    if (!confirm(msg)) return;
+    await clearSnapshot();
+    if (clearHistoryToo) await clearAllHistory();
+    setLitmosData(null);
+    setCipData(null);
+    setProdData(null);
+    setNavData(null);
+    setPeopleData(null);
+    setLitmosFiles([]);
+    setCipFiles([]);
+    setProdFiles([]);
+    setNavFiles([]);
+    setPeopleFiles([]);
+    setSavedAt(null);
+    setFileMeta(null);
+    setFileTypes({});
+    setHistory([]);
+  }, []);
+
+  // Load history for trend insights. We only need the dates + agent digests.
+  const [history, setHistory] = useState([]);
+  useEffect(() => {
+    loadHistory().then(setHistory).catch(() => setHistory([]));
+  }, [savedAt]); // refresh when a new snapshot is saved
+
+  // Compute today vs yesterday delta for the dashboard insight strip.
+  const trendInsights = useMemo(() => {
+    if (history.length < 2) return null;
+    const [today, prev] = history; // sorted desc
+    const todaySet = new Set(today.agentSnapshot?.inProductionSids || []);
+    const prevSet = new Set(prev.agentSnapshot?.inProductionSids || []);
+    const newToProduction = [...todaySet].filter(s => !prevSet.has(s));
+    const leftProduction = [...prevSet].filter(s => !todaySet.has(s));
+    const todayPipe = new Set(today.agentSnapshot?.inPipelineSids || []);
+    const prevPipe = new Set(prev.agentSnapshot?.inPipelineSids || []);
+    const newToPipeline = [...todayPipe].filter(s => !prevPipe.has(s));
+    const leftPipeline = [...prevPipe].filter(s => !todayPipe.has(s));
+    return {
+      previousDate: prev.date,
+      newToProduction: newToProduction.length,
+      leftProduction: leftProduction.length,
+      newToPipeline: newToPipeline.length,
+      leftPipeline: leftPipeline.length,
+      newToProductionSids: newToProduction,
+      leftProductionSids: leftProduction,
+    };
+  }, [history]);
 
   const toggleSection = (key) => setOpenSections(prev => {
     const next = new Set(prev);
@@ -327,7 +444,55 @@ export default function ProductionReadinessChecker() {
       setProdData(prodRows);
       setNavData(navRows);
       setPeopleData(pplRows);
-    } catch (e) { console.error(e); }
+
+      // Persist to IndexedDB so the data survives page refreshes
+      const meta = {
+        litmos: litmosFiles.map(f => ({ name: f.name, size: f.size })),
+        cip: cipFiles.map(f => ({ name: f.name, size: f.size })),
+        prod: prodFiles.map(f => ({ name: f.name, size: f.size })),
+        nav: navFiles.map(f => ({ name: f.name, size: f.size })),
+        people: peopleFiles.map(f => ({ name: f.name, size: f.size })),
+      };
+      const now = Date.now();
+
+      // Build a compact agent digest for the daily history entry.
+      // Stores just enough to answer "who was in production yesterday vs today?"
+      // and other day-over-day diffs without persisting full parsed CSVs for 30 days.
+      const inProduction = new Set();
+      prodRows.forEach(r => {
+        const sid = (r.so_agent_id || r.shyftoff_id || "").trim();
+        if (sid) inProduction.add(sid);
+      });
+      const inPipeline = new Set();
+      cipRows.forEach(r => {
+        const sid = (r.shyftoff_id || "").trim();
+        if (sid) inPipeline.add(sid);
+      });
+      const agentDigest = {
+        inProductionSids: [...inProduction],
+        inPipelineSids: [...inPipeline],
+      };
+      const statsDigest = {
+        pipelineTotal: inPipeline.size,
+        productionTotal: inProduction.size,
+        litmosPeople: pplRows.length,
+        navAttended: navRows.length,
+      };
+
+      await saveSnapshot({
+        parsedData: {
+          litmosData: litRows,
+          cipData: cipRows,
+          prodData: prodRows,
+          navData: navRows,
+          peopleData: pplRows,
+        },
+        fileMeta: meta,
+        agentDigest,
+      }, statsDigest);
+      setSavedAt(now);
+      setFileMeta(meta);
+    } catch (e) { console.error("handleProcess failed:", e); }
     setProcessing(false);
   }, [litmosFiles, cipFiles, prodFiles, navFiles, peopleFiles]);
 
@@ -1128,12 +1293,62 @@ export default function ProductionReadinessChecker() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-4">
+        {/* Cache status bar — appears when data is restored from IndexedDB */}
+        {savedAt && (
+          <div className="mb-3 rounded-lg px-3 py-2 flex items-center justify-between text-xs"
+            style={{ background: isStale(savedAt) ? "#3d300022" : "#1a4d2e22", border: `1px solid ${isStale(savedAt) ? "#FFE566" : "#1a4d2e"}` }}>
+            <div className="flex items-center gap-3">
+              <span style={{ color: isStale(savedAt) ? "#FFE566" : "#4ade80" }}>
+                {isStale(savedAt) ? "⚠ Loaded data is from a previous day" : "✓ Loaded from cache"}
+              </span>
+              <span style={{ color: "#7a5f9a" }}>{formatLoadedTime(savedAt)}</span>
+              {fileMeta && (
+                <span style={{ color: "#5c3d7a" }}>
+                  • {Object.values(fileMeta).reduce((sum, arr) => sum + arr.length, 0)} files
+                </span>
+              )}
+              {history.length > 1 && (
+                <span style={{ color: "#5c3d7a" }}>• {history.length} day{history.length > 1 ? "s" : ""} of history</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {isStale(savedAt) && (
+                <span style={{ color: "#FFE566" }}>Re-upload today's files to refresh</span>
+              )}
+              <button onClick={() => handleClearCache(false)}
+                className="px-2 py-0.5 rounded text-xs transition-all hover:brightness-110"
+                style={{ background: "#3d2057", color: "#b8a5d4" }}
+                title="Clears current snapshot. Daily history is preserved.">
+                Clear cache
+              </button>
+            </div>
+          </div>
+        )}
+        {/* Day-over-day trend insight — only shown when 2+ days of history exist */}
+        {trendInsights && (
+          <div className="mb-3 rounded-lg px-3 py-2 flex items-center gap-4 text-xs"
+            style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
+            <span className="font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Since {trendInsights.previousDate}</span>
+            <span style={{ color: trendInsights.newToProduction > 0 ? "#4ade80" : "#5c3d7a" }}>
+              ▲ {trendInsights.newToProduction} new in production
+            </span>
+            <span style={{ color: trendInsights.leftProduction > 0 ? "#FF7866" : "#5c3d7a" }}>
+              ▼ {trendInsights.leftProduction} left production
+            </span>
+            <span style={{ color: trendInsights.newToPipeline > 0 ? "#8F68D3" : "#5c3d7a" }}>
+              ▲ {trendInsights.newToPipeline} new in pipeline
+            </span>
+            <span style={{ color: trendInsights.leftPipeline > 0 ? "#b8a5d4" : "#5c3d7a" }}>
+              ▼ {trendInsights.leftPipeline} left pipeline
+            </span>
+          </div>
+        )}
         <div className="grid grid-cols-5 gap-3 mb-4">
-          <FileUpload label="Litmos Course Data" sublabel="Required — CSV with course completions" onFiles={f => setLitmosFiles(f)} multiple files={litmosFiles} />
-          <FileUpload label="Litmos People Report" sublabel="Required — Who has a Litmos account" onFiles={f => setPeopleFiles(f)} multiple={false} files={peopleFiles} />
-          <FileUpload label="Nesting / CIP Export" sublabel="Required — Dashboard or CIP agent export" onFiles={f => setCipFiles(f)} multiple files={cipFiles} />
-          <FileUpload label="Production Exports" sublabel="Optional — Exclude current prod agents" onFiles={f => setProdFiles(f)} multiple files={prodFiles} />
-          <FileUpload label="Nav Meeting Tracker" sublabel="Optional — Upload multiple ShyftNav exports. Duplicates auto-deduped." onFiles={f => setNavFiles(f)} multiple files={navFiles} />
+          <FileUpload label="Litmos Course Data" sublabel="Required — CSV with course completions" onFiles={f => handleFiles("litmos", setLitmosFiles, f)} multiple files={litmosFiles} validation={fileTypes.litmos} />
+          <FileUpload label="Litmos People Report" sublabel="Required — Who has a Litmos account" onFiles={f => handleFiles("people", setPeopleFiles, f)} multiple={false} files={peopleFiles} validation={fileTypes.people} />
+          <FileUpload label="Nesting / CIP Export" sublabel="Required — Dashboard or CIP agent export" onFiles={f => handleFiles("cip", setCipFiles, f)} multiple files={cipFiles} validation={fileTypes.cip} />
+          <FileUpload label="Production Exports" sublabel="Optional — Exclude current prod agents" onFiles={f => handleFiles("prod", setProdFiles, f)} multiple files={prodFiles} validation={fileTypes.prod} />
+          <FileUpload label="Nav Meeting Tracker" sublabel="Optional — Upload multiple ShyftNav exports. Duplicates auto-deduped." onFiles={f => handleFiles("nav", setNavFiles, f)} multiple files={navFiles} validation={fileTypes.nav} />
         </div>
 
         <div className="flex gap-2 mb-5">
