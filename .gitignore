@@ -2,3 +2,7 @@ node_modules
 dist
 .DS_Store
 *.local
+
+# Sample data files — keep these out of the repo
+*.csv
+production_readiness_checker.jsx
