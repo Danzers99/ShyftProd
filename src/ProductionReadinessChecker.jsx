@@ -5,6 +5,9 @@ import { REQUIRED_LITMOS, SHORT_LITMOS, ROSTER_COURSES, NESTING_COURSES, FL_BLUE
 import { parseCSV } from "./parsers/parseCSV";
 import { normalize, nameKey, nameParts, nameKeyVariations, candidateEmails } from "./parsers/matchNames";
 import { parseCertProgress } from "./parsers/parseCertProgress";
+import { dedupCipData } from "./parsers/dedupCipData";
+import { resolveBgStatus } from "./parsers/resolveBgStatus";
+import { buildProdCampaignMaps, isInProdForCampaign, getProdCampaigns } from "./parsers/prodCampaigns";
 import Badge from "./components/Badge";
 import StatCard from "./components/StatCard";
 import CourseDot from "./components/CourseDot";
@@ -242,51 +245,9 @@ export default function ProductionReadinessChecker() {
   const results = useMemo(() => {
     if (!litmosData || !cipData) return null;
 
-    // Track production status BY CAMPAIGN so agents in prod for one campaign
-    // (e.g. Bilingual) can still be tracked in pipeline for another (e.g. ENG).
-    // Map: SID → Set of campaign names they're in production for
-    const prodCampaignsBySid = new Map();
-    const prodCampaignsByKey = new Map(); // name-key fallback when no SID
-    const addProdCampaign = (key, campaign) => {
-      if (!key || !campaign) return;
-      const map = key.includes("|") ? prodCampaignsByKey : prodCampaignsBySid;
-      if (!map.has(key)) map.set(key, new Set());
-      map.get(key).add(campaign);
-    };
-    (prodData || []).forEach(r => {
-      const nm = (r.agent_nm || r.agent_name || r.full_name || "").trim();
-      const sid = (r.so_agent_id || r.shyftoff_id || "").trim().toUpperCase();
-      // Single campaign per row (JSON-format production exports)
-      const campaign = (r.campaign_nm || "").trim();
-      // Comma/semicolon-separated list (simple-format production agents)
-      const campaignList = (r.productive_campaigns_list || r.active_campaigns_list || "").trim();
-      const campaigns = campaign ? [campaign] : campaignList.split(/[;,]/).map(c => c.trim()).filter(Boolean);
-      if (sid) {
-        campaigns.forEach(c => addProdCampaign(sid, c));
-      }
-      // Also track by name key for agents without SID or for fallback matching
-      const { first, last } = nameParts(nm);
-      const nk = nameKey(first, last);
-      campaigns.forEach(c => addProdCampaign(nk, c));
-      const pp = nm.split(/\s+/).filter(Boolean);
-      if (pp.length > 2) {
-        const nk2 = nameKey(pp.slice(0, -1).join(""), pp[pp.length - 1]);
-        campaigns.forEach(c => addProdCampaign(nk2, c));
-      }
-    });
-    // Helper: is this agent in production for this specific campaign?
-    const isInProdForCampaign = (sid, key, campaign) => {
-      if (!campaign) return false;
-      const sidProdCampaigns = prodCampaignsBySid.get(sid?.toUpperCase() || "") || new Set();
-      const keyProdCampaigns = prodCampaignsByKey.get(key) || new Set();
-      return sidProdCampaigns.has(campaign) || keyProdCampaigns.has(campaign);
-    };
-    // Helper: get ALL campaigns this agent is in production for
-    const getProdCampaigns = (sid, key) => {
-      const sidSet = prodCampaignsBySid.get(sid?.toUpperCase() || "") || new Set();
-      const keySet = prodCampaignsByKey.get(key) || new Set();
-      return [...new Set([...sidSet, ...keySet])];
-    };
+    // Build campaign-aware production lookup (campaign-specific exclusion).
+    // Logic lives in parsers/prodCampaigns.js (covered by unit tests).
+    const prodMaps = buildProdCampaignMaps(prodData);
 
     // People Report: who has a Litmos account (= has credentials)
     // Track name → usernames so we can detect collisions (multiple people with same name)
@@ -385,58 +346,9 @@ export default function ProductionReadinessChecker() {
       return ldata;
     }
 
-    // Deduplicate agents by ShyftOff ID when multiple files are uploaded
-    // Merge strategy: Roster/Nesting exports have accurate course progress (integer)
-    // and simple BG status. CIP export has detailed BG JSON for mismatch detection.
-    // Keep both, but prefer Roster/Nesting for course data.
-    const seenSids = new Map();
-    cipData.forEach(row => {
-      const sid = (row.shyftoff_id || "").trim();
-      if (!sid) return;
-      if (seenSids.has(sid)) {
-        const existing = seenSids.get(sid);
-        // BG JSON: keep the one with actual data (non-null process_status)
-        if (row.background_check) {
-          if (!existing.background_check) {
-            existing.background_check = row.background_check;
-          } else {
-            // Both have BG JSON — prefer the one with non-null process_status
-            try {
-              const inArr = JSON.parse(row.background_check);
-              const exArr = JSON.parse(existing.background_check);
-              const inPs = inArr?.[0]?.process_status || "";
-              const exPs = exArr?.[0]?.process_status || "";
-              if (inPs && !exPs) existing.background_check = row.background_check;
-            } catch {}
-          }
-        }
-        // Simple BG status: keep any non-empty value (Roster is authoritative)
-        if (row.background_check_status && !existing.background_check_status) existing.background_check_status = row.background_check_status;
-        // Stale level from Roster/Nesting
-        if (row.stale_level && !existing.stale_level) existing.stale_level = row.stale_level;
-        // Cert progress: ALWAYS prefer Roster/Nesting integer over CIP JSON
-        // Roster/Nesting integers are accurate for ShyftOff courses; CIP JSON is not
-        if (row.certification_progress) {
-          const incoming = row.certification_progress.trim();
-          const existingCert = (existing.certification_progress || "").trim();
-          const incomingIsInteger = incoming.match(/^\d+$/);
-          const existingIsInteger = existingCert.match(/^\d+$/);
-          if (incomingIsInteger && !existingIsInteger) {
-            // Incoming is Roster integer, existing is CIP JSON — prefer Roster
-            existing.certification_progress = row.certification_progress;
-          } else if (!existingCert) {
-            existing.certification_progress = row.certification_progress;
-          }
-        }
-        // Prefer Roster/Nesting status if it has more detail
-        if (row.status && row.agent_name && !existing.agent_name) {
-          existing.agent_name = row.agent_name;
-        }
-        return;
-      }
-      seenSids.set(sid, { ...row });
-    });
-    const dedupedCip = [...seenSids.values()];
+    // Deduplicate agents by ShyftOff ID when multiple files are uploaded.
+    // Merge strategy lives in parsers/dedupCipData.js (covered by unit tests).
+    const dedupedCip = dedupCipData(cipData);
 
     const agents = [];
     dedupedCip.forEach(row => {
@@ -451,8 +363,8 @@ export default function ProductionReadinessChecker() {
       // FOR THIS ROW'S SPECIFIC CAMPAIGN. An agent can be in prod for Bilingual but
       // still active in the pipeline for ENG (and vice versa).
       const rowCampaign = (row.campaign_nm || "").trim();
-      const prodCampaignsForAgent = getProdCampaigns(sid, key);
-      if (rowCampaign && isInProdForCampaign(sid, key, rowCampaign)) return;
+      const prodCampaignsForAgent = getProdCampaigns(prodMaps, sid, key);
+      if (rowCampaign && isInProdForCampaign(prodMaps, sid, key, rowCampaign)) return;
       // If no campaign info on this row, fall back to old behavior: exclude if in ANY prod
       if (!rowCampaign && prodCampaignsForAgent.length > 0) return;
 
@@ -520,32 +432,9 @@ export default function ProductionReadinessChecker() {
       } else {
         inLitmos = ldata !== null;
       }
-      // Parse background check from both formats:
-      // Roster/Nesting: simple `background_check_status` string ("cleared", "pending", etc.)
-      // CIP Export: JSON `background_check` with process_status/report_status
-      let bgStatus = (row.background_check_status || "").trim().toLowerCase();
-      let cipBgProcess = "";
-      let cipBgReport = "";
-      const bgJson = (row.background_check || "").trim();
-      if (bgJson.startsWith("[")) {
-        try {
-          const arr = JSON.parse(bgJson);
-          if (arr.length > 0) {
-            cipBgProcess = (arr[0].process_status || "").toUpperCase();
-            cipBgReport = (arr[0].report_status || "").toLowerCase();
-          }
-        } catch {}
-      }
-      // If no simple status but CIP JSON exists, derive status from it
-      if (!bgStatus && cipBgProcess) {
-        bgStatus = cipBgProcess === "PASSED" ? "cleared" : cipBgReport || cipBgProcess.toLowerCase();
-      }
-      // BG is cleared if: CIP process says PASSED, OR CIP report says clear/proceed,
-      // OR simple status says cleared (but ONLY when CIP doesn't contradict it)
-      const bgReportClear = cipBgReport === "clear" || cipBgReport === "proceed";
-      const cipContradicts = cipBgProcess === "IN_PROGRESS" && !bgReportClear && cipBgProcess !== "";
-      const bgCleared = cipBgProcess === "PASSED" || bgReportClear
-        || (bgStatus === "cleared" && !cipContradicts);
+      // BG status resolution (cross-source mismatch detection lives in resolveBgStatus).
+      const bg = resolveBgStatus(row);
+      const { bgStatus, bgCleared, cipBgProcess, cipBgReport, isBgMismatch, hasAccountIssue } = bg;
       const createdAt = row.created_at ? new Date(row.created_at) : null;
       const lastChanged = row.last_changed || row.status_updated_at || "";
       const changedAt = lastChanged ? new Date(lastChanged) : null;
@@ -567,12 +456,6 @@ export default function ProductionReadinessChecker() {
       const isGhost = isNesting && !inLitmos && !hasNameCollision;
       // Missing CCAAS = needs ccaas_id assigned before moving to production
       const missingCcaas = !hasCcaas;
-      // BG mismatch: Roster/Nesting says "cleared" but CIP JSON says IN_PROGRESS
-      // with a non-clear report (pending/processing/consider/created).
-      // This is the cross-source discrepancy — the simple status is stale/wrong.
-      const simpleBgCleared = (row.background_check_status || "").trim().toLowerCase() === "cleared";
-      const cipBgNotCleared = cipBgProcess === "IN_PROGRESS" && !bgReportClear;
-      const isBgMismatch = simpleBgCleared && cipBgNotCleared;
 
       // Credential pipeline flags (cross-referencing status + actual data)
       // Ready for credentials = courses done + BG cleared + CONFIRMED not in Litmos.
@@ -595,8 +478,7 @@ export default function ProductionReadinessChecker() {
       // Split stale into: in credentials queue vs truly stale (only agents with cleared BG)
       const isStaleInQueue = isStaleWaiter && isCredentialsRequested;
       const isTrulyStale = isStaleWaiter && !isCredentialsRequested;
-      // Account issue = BG not cleared, but NOT a known mismatch (those get their own category)
-      const hasAccountIssue = !bgCleared && bgStatus !== "" && !isBgMismatch;
+      // hasAccountIssue and isBgMismatch already computed by resolveBgStatus above
 
       const allLitmos = litmosCount === 14;
       const navMet = navAttended || !(navData && navData.length > 0);
