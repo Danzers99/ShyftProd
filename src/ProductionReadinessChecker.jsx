@@ -572,9 +572,6 @@ export default function ProductionReadinessChecker() {
       const preProdDone = (courseMap[NESTING_COURSES[0]] || 0) >= 100;
       const navCourseDone = (courseMap[NESTING_COURSES[1]] || 0) >= 100;
       const nestingCoursesDone = preProdDone && navCourseDone;
-      // Detect agents who completed the OLD Pre-Production (without FL Blue content)
-      // and need to re-complete the merged version. Signal: Pre-Prod done but FL Blue not done.
-      const needsPreProdRecompletion = preProdDone && !flBlueDone;
 
       // Nav attendance — check all name variations (handles middle initials, multi-part names)
       const navAttended = nameKeyVariations(name).some(k => navKeys.has(k))
@@ -714,7 +711,7 @@ export default function ProductionReadinessChecker() {
         nbEmail: ldata?.email || "",
         litmosCount, litmosDone, litmosTotal: 14,
         shyftoffPct, shyftoffComplete, courseMap, certMap: cert.map,
-        nbCertDone, flBlueDone, rosterCoursesDone, needsPreProdRecompletion,
+        nbCertDone, flBlueDone, rosterCoursesDone,
         preProdDone, navCourseDone, nestingCoursesDone,
         navAttended, navAvailable: navData && navData.length > 0,
         readyStatus, allLitmos,
@@ -850,7 +847,6 @@ export default function ProductionReadinessChecker() {
     if (filter === "name_collision") out = out.filter(a => a.hasNameCollision);
     if (filter === "needs_nav") out = out.filter(a => a.needsNavOutreach);
     if (filter === "needs_bump") out = out.filter(a => a.needsNestingBump);
-    if (filter === "needs_preprod_redo") out = out.filter(a => a.needsPreProdRecompletion);
     if (filter === "campaign_eng") out = out.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign));
     if (filter === "campaign_bi") out = out.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign));
     if (filter === "campaign_both") out = out.filter(a => a.rowCampaign && /nations/i.test(a.rowCampaign) && a.prodCampaigns && a.prodCampaigns.length > 0);
@@ -885,7 +881,6 @@ export default function ProductionReadinessChecker() {
       nameCollisions: results.filter(a => a.hasNameCollision).length,
       needsNavOutreach: results.filter(a => a.needsNavOutreach).length,
       needsNestingBump: results.filter(a => a.needsNestingBump).length,
-      needsPreProdRecompletion: results.filter(a => a.needsPreProdRecompletion).length,
       flBlueDone: results.filter(a => a.flBlueDone).length,
       flBlueIncomplete: results.filter(a => !a.flBlueDone).length,
       engPipeline: results.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign)).length,
@@ -936,7 +931,7 @@ export default function ProductionReadinessChecker() {
 
   const handleExportIssues = () => {
     if (!results) return;
-    const issueAgents = results.filter(a => a.isBgMismatch || a.hasAccountIssue || a.isGhost || a.isTrulyStale || a.isStaleInQueue || a.hasNameCollision || a.needsNestingBump || a.needsPreProdRecompletion);
+    const issueAgents = results.filter(a => a.isBgMismatch || a.hasAccountIssue || a.isGhost || a.isTrulyStale || a.isStaleInQueue || a.hasNameCollision || a.needsNestingBump);
     if (!issueAgents.length) return;
     const today = new Date().toISOString().split("T")[0];
     const headers = [
@@ -959,7 +954,6 @@ export default function ProductionReadinessChecker() {
     ];
     issueAgents.forEach(a => {
       if (a.needsNestingBump) rows.push(["Needs Nesting Bump", ...baseFields(a), "Agent is in a Roster status but already has Litmos credentials. Move to 'Nesting - First Call' so they can access the pre-production course."]);
-      if (a.needsPreProdRecompletion) rows.push(["Needs Pre-Prod Redo", ...baseFields(a), "Agent completed the old Pre-Production course before FL Blue 2026 content was folded in. They need to re-complete the updated Pre-Production course."]);
       if (a.isBgMismatch) rows.push(["BG Data Mismatch", ...baseFields(a), "Roster shows cleared but CIP shows In Progress. Investigate BG check system sync."]);
       if (a.hasAccountIssue) rows.push(["BG Pending/Created", ...baseFields(a), "Background check not cleared. Agent blocked from progressing."]);
       if (a.isGhost) rows.push(["Nesting Without Credentials", ...baseFields(a), "In Nesting status but no Litmos account. Needs credentialing or status correction."]);
@@ -1130,26 +1124,17 @@ export default function ProductionReadinessChecker() {
                 <div className="text-xs flex gap-3" style={{ color: "#5c3d7a" }}>
                   <span style={{ color: stats.needsNestingBump > 0 ? "#FF66C4" : "#5c3d7a" }}>{stats.needsNestingBump} need Nesting bump</span>
                   <span>•</span>
-                  <span style={{ color: stats.needsPreProdRecompletion > 0 ? "#FF7866" : "#5c3d7a" }}>{stats.needsPreProdRecompletion} need Pre-Prod redo</span>
-                  <span>•</span>
                   <span style={{ color: stats.needsNavOutreach > 0 ? "#FFE566" : "#5c3d7a" }}>{stats.needsNavOutreach} need Nav</span>
                 </div>
               </button>
               {openSections.has("outreach") && (
-                <div className="px-4 py-3 grid grid-cols-3 gap-2" style={{ background: "#27133A" }}>
+                <div className="px-4 py-3 grid grid-cols-2 gap-2" style={{ background: "#27133A" }}>
                   <button onClick={() => setFilter(filter === "needs_bump" ? "all" : "needs_bump")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "needs_bump" ? "#FF66C422" : "#FF66C411", border: `1px solid ${filter === "needs_bump" ? "#FF66C4" : "#794EC2"}` }}>
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-sm font-bold" style={{ color: "#FF66C4" }}>Needs Nesting Bump</span>
                       <span className="text-2xl font-black" style={{ color: "#FF66C4" }}>{stats.needsNestingBump}</span>
                     </div>
                     <div className="text-xs" style={{ color: "#b8a5d4" }}>In a Roster status but already has Litmos credentials. Manually move to "Nesting - First Call" so they can access pre-production.</div>
-                  </button>
-                  <button onClick={() => setFilter(filter === "needs_preprod_redo" ? "all" : "needs_preprod_redo")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "needs_preprod_redo" ? "#FF786622" : "#FF786611", border: `1px solid ${filter === "needs_preprod_redo" ? "#FF7866" : "#4D1F3B"}` }}>
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-sm font-bold" style={{ color: "#FF7866" }}>Needs Pre-Prod Redo</span>
-                      <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.needsPreProdRecompletion}</span>
-                    </div>
-                    <div className="text-xs" style={{ color: "#b8a5d4" }}>Completed old Pre-Production before FL Blue was merged in. Need to re-complete the updated course for the new content.</div>
                   </button>
                   <button onClick={() => setFilter(filter === "needs_nav" ? "all" : "needs_nav")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "needs_nav" ? "#FFE56622" : "#FFE56611", border: `1px solid ${filter === "needs_nav" ? "#FFE566" : "#3d2057"}` }}>
                     <div className="flex items-center justify-between mb-0.5">
@@ -1345,7 +1330,6 @@ export default function ProductionReadinessChecker() {
             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
             {a.hasNameCollision && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#FF66C4", fontSize: 10 }}>⚠ NAME COLLISION</span>}
             {a.needsNestingBump && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#794EC2", color: "#FF66C4", fontSize: 10 }}>NEEDS NESTING BUMP</span>}
-            {a.needsPreProdRecompletion && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d3000", color: "#FFE566", fontSize: 10 }}>↻ PRE-PROD REDO</span>}
                           </div>
                           )}
                         </td>
@@ -1570,22 +1554,19 @@ export default function ProductionReadinessChecker() {
                   const pct = ag.courseMap[course] || 0;
                   const done = pct >= 100;
                   const locked = !ag.inLitmos;
-                  // Pre-Production now includes FL Blue content. If they completed the OLD
-                  // version (preProdDone) but FL Blue is unfinished, they need to re-complete.
                   const isPreProd = course === NESTING_COURSES[0];
-                  const needsRedo = isPreProd && ag.needsPreProdRecompletion;
                   return (
                     <div key={i} className="flex items-center gap-2 mb-1.5" style={{ opacity: locked ? 0.5 : 1 }}>
                       <div className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center text-xs font-bold"
-                        style={{ background: needsRedo ? "#3d3000" : done ? "#1a4d2e" : "#3d2057", color: needsRedo ? "#FFE566" : done ? "#4ade80" : locked ? "#5c3d7a" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
-                        {locked ? "🔒" : needsRedo ? "↻" : done ? "✓" : pct > 0 ? "◔" : "○"}
+                        style={{ background: done ? "#1a4d2e" : "#3d2057", color: done ? "#4ade80" : locked ? "#5c3d7a" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                        {locked ? "🔒" : done ? "✓" : pct > 0 ? "◔" : "○"}
                       </div>
                       <div className="flex-1">
                         <div className="text-xs font-semibold" style={{ color: done ? "#E8DFF6" : "#b8a5d4" }}>
-                          {course}{isPreProd && <span style={{ color: "#7a5f9a", fontWeight: 400 }}> (now includes FL Blue)</span>}
+                          {course}{isPreProd && <span style={{ color: "#7a5f9a", fontWeight: 400 }}> (includes FL Blue)</span>}
                         </div>
-                        <div className="text-xs" style={{ color: needsRedo ? "#FFE566" : locked ? "#5c3d7a" : done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
-                          {needsRedo ? "Needs re-completion — completed old version before FL Blue was merged in" : locked ? "Requires credentials" : done ? "Complete" : pct > 0 ? `${pct}% in progress` : "Not started"}
+                        <div className="text-xs" style={{ color: locked ? "#5c3d7a" : done ? "#4ade80" : pct > 0 ? "#FFE566" : "#5c3d7a" }}>
+                          {locked ? "Requires credentials" : done ? "Complete" : pct > 0 ? `${pct}% in progress` : "Not started"}
                         </div>
                       </div>
                     </div>
