@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useDeferredValue } from "react";
+import { useToast } from "./components/Toast";
 import { saveSnapshot, loadSnapshot, clearSnapshot, isStale, formatLoadedTime, loadHistory, clearAllHistory } from "./utils/storage";
 import { identifyFile, validateSlot } from "./utils/schemaValidation";
 import { REQUIRED_LITMOS, SHORT_LITMOS, ROSTER_COURSES, NESTING_COURSES, FL_BLUE_LEGACY, SHYFTOFF_COURSES } from "./utils/constants";
@@ -25,6 +26,7 @@ import FileUpload from "./components/FileUpload";
 // The pure functions are covered by tests in src/**/__tests__/.
 
 export default function ProductionReadinessChecker() {
+  const toast = useToast();
   const [litmosFiles, setLitmosFiles] = useState([]);
   const [cipFiles, setCipFiles] = useState([]);
   const [prodFiles, setProdFiles] = useState([]);
@@ -37,6 +39,10 @@ export default function ProductionReadinessChecker() {
   const [peopleData, setPeopleData] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [search, setSearch] = useState("");
+  // useDeferredValue lets the input update synchronously while the
+  // expensive filter+render of 600+ agents is debounced into the
+  // next paint frame. Keeps typing snappy.
+  const deferredSearch = useDeferredValue(search);
   const [filter, setFilter] = useState("all");
   const [expandedRow, setExpandedRow] = useState(null);
   const [showEmail, setShowEmail] = useState(false);
@@ -63,6 +69,11 @@ export default function ProductionReadinessChecker() {
           setPeopleData(snap.parsedData?.peopleData || null);
           setSavedAt(snap.savedAt);
           setFileMeta(snap.fileMeta || null);
+          if (isStale(snap.savedAt)) {
+            toast.warn(`Loaded data from ${formatLoadedTime(snap.savedAt)} — re-upload today's files for fresh insights`);
+          } else {
+            toast.success(`Restored cached data from ${formatLoadedTime(snap.savedAt)}`);
+          }
         }
       } catch (e) {
         console.error("Snapshot restore failed:", e);
@@ -71,6 +82,8 @@ export default function ProductionReadinessChecker() {
       }
     })();
     return () => { cancelled = true; };
+    // toast is stable from context; intentionally omitting to run only on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Schema-check uploaded files and surface any slot mismatches as warnings.
@@ -121,7 +134,8 @@ export default function ProductionReadinessChecker() {
     setFileMeta(null);
     setFileTypes({});
     setHistory([]);
-  }, []);
+    toast.info(clearHistoryToo ? "Cleared cache and history" : "Cleared cache");
+  }, [toast]);
 
   // Load history for trend insights. We only need the dates + agent digests.
   const [history, setHistory] = useState([]);
@@ -164,6 +178,7 @@ export default function ProductionReadinessChecker() {
     navigator.clipboard.writeText(text);
     setCopiedIdx(idx);
     setTimeout(() => setCopiedIdx(null), 1500);
+    toast.success(`Copied: ${a.name}`);
   };
 
   const readFiles = async (files) => {
@@ -238,9 +253,14 @@ export default function ProductionReadinessChecker() {
       }, statsDigest);
       setSavedAt(now);
       setFileMeta(meta);
-    } catch (e) { console.error("handleProcess failed:", e); }
+      const totalRows = litRows.length + cipRows.length + prodRows.length + navRows.length + pplRows.length;
+      toast.success(`Analyzed ${totalRows.toLocaleString()} rows · saved to cache`);
+    } catch (e) {
+      console.error("handleProcess failed:", e);
+      toast.error(`Analysis failed: ${e.message}`);
+    }
     setProcessing(false);
-  }, [litmosFiles, cipFiles, prodFiles, navFiles, peopleFiles]);
+  }, [litmosFiles, cipFiles, prodFiles, navFiles, peopleFiles, toast]);
 
   const results = useMemo(() => {
     if (!litmosData || !cipData) return null;
@@ -614,8 +634,8 @@ export default function ProductionReadinessChecker() {
     if (prodFilters.includes(filter)) {
       let out = prodAgents;
       if (filter === "prod_flblue_incomplete") out = out.filter(a => a.hasFlBlueData ? !a.flBlueDone : !a.allCoursesDone);
-      if (search) {
-        const s = search.toLowerCase();
+      if (deferredSearch) {
+        const s = deferredSearch.toLowerCase();
         out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s));
       }
       return out;
@@ -640,12 +660,12 @@ export default function ProductionReadinessChecker() {
     if (filter === "campaign_eng") out = out.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign));
     if (filter === "campaign_bi") out = out.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign));
     if (filter === "campaign_both") out = out.filter(a => a.rowCampaign && /nations/i.test(a.rowCampaign) && a.prodCampaigns && a.prodCampaigns.length > 0);
-    if (search) {
-      const s = search.toLowerCase();
+    if (deferredSearch) {
+      const s = deferredSearch.toLowerCase();
       out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s) || (a.nbEmail || "").toLowerCase().includes(s));
     }
     return out;
-  }, [results, prodAgents, filter, search]);
+  }, [results, prodAgents, filter, deferredSearch]);
 
   const stats = useMemo(() => {
     if (!results) return null;
@@ -717,6 +737,7 @@ export default function ProductionReadinessChecker() {
       ];
     });
     downloadCsv(headers, rows, "production_readiness_report.csv");
+    toast.success(`Exported ${rows.length.toLocaleString()} agents to CSV`);
   };
 
   const handleExportIssues = () => {
@@ -754,6 +775,7 @@ export default function ProductionReadinessChecker() {
     // Sort by issue type so BG mismatches are grouped together
     rows.sort((a, b) => a[0].localeCompare(b[0]));
     downloadCsv(headers, rows, `pipeline_issues_${today}.csv`);
+    toast.success(`Exported ${rows.length.toLocaleString()} issue rows`);
   };
 
   // Dedicated export for the recurring "Needs Nesting Bump" report.
@@ -808,6 +830,7 @@ export default function ProductionReadinessChecker() {
     });
 
     downloadCsv(headers, rows, `needs_nesting_bump_by_campaign_${today}.csv`);
+    toast.success(`Exported ${rows.length.toLocaleString()} agents needing Nesting bump`);
   };
 
   const emailBody = useMemo(() => {
@@ -881,6 +904,7 @@ export default function ProductionReadinessChecker() {
 
   const handleCopyEmail = () => {
     navigator.clipboard.writeText(emailBody);
+    toast.success("Email body copied to clipboard");
   };
 
   const handleOpenMail = () => {
@@ -969,29 +993,36 @@ export default function ProductionReadinessChecker() {
           </div>
         )}
         <div className="grid grid-cols-5 gap-3 mb-4">
-          <FileUpload label="Litmos Course Data" sublabel="Required — CSV with course completions" onFiles={f => handleFiles("litmos", setLitmosFiles, f)} multiple files={litmosFiles} validation={fileTypes.litmos} />
-          <FileUpload label="Litmos People Report" sublabel="Required — Who has a Litmos account" onFiles={f => handleFiles("people", setPeopleFiles, f)} multiple={false} files={peopleFiles} validation={fileTypes.people} />
-          <FileUpload label="Nesting / CIP Export" sublabel="Required — Dashboard or CIP agent export" onFiles={f => handleFiles("cip", setCipFiles, f)} multiple files={cipFiles} validation={fileTypes.cip} />
-          <FileUpload label="Production Exports" sublabel="Optional — Exclude current prod agents" onFiles={f => handleFiles("prod", setProdFiles, f)} multiple files={prodFiles} validation={fileTypes.prod} />
-          <FileUpload label="Nav Meeting Tracker" sublabel="Optional — Upload multiple ShyftNav exports. Duplicates auto-deduped." onFiles={f => handleFiles("nav", setNavFiles, f)} multiple files={navFiles} validation={fileTypes.nav} />
+          <FileUpload required label="Litmos Course Data" sublabel="CSV with per-course completions" onFiles={f => handleFiles("litmos", setLitmosFiles, f)} multiple files={litmosFiles} validation={fileTypes.litmos} />
+          <FileUpload required label="Litmos People Report" sublabel="Who has a Litmos account" onFiles={f => handleFiles("people", setPeopleFiles, f)} multiple={false} files={peopleFiles} validation={fileTypes.people} />
+          <FileUpload required label="Nesting / CIP Export" sublabel="Dashboard or CIP agent export" onFiles={f => handleFiles("cip", setCipFiles, f)} multiple files={cipFiles} validation={fileTypes.cip} />
+          <FileUpload label="Production Exports" sublabel="Exclude current prod agents" onFiles={f => handleFiles("prod", setProdFiles, f)} multiple files={prodFiles} validation={fileTypes.prod} />
+          <FileUpload label="Nav Meeting Tracker" sublabel="Upload multiple ShyftNav exports — duplicates auto-deduped" onFiles={f => handleFiles("nav", setNavFiles, f)} multiple files={navFiles} validation={fileTypes.nav} />
         </div>
 
-        <div className="flex gap-2 mb-5">
+        <div className="flex gap-2 mb-5 items-center flex-wrap">
           <button onClick={handleProcess}
-            disabled={!litmosFiles.length || !cipFiles.length || processing}
-            className="px-5 py-2 rounded-lg text-sm font-bold transition-all disabled:opacity-30"
-            style={{ background: "#8F68D3", color: "#27133A" }}>
-            {processing ? "Processing..." : "Analyze Readiness"}
+            disabled={!litmosFiles.length || !cipFiles.length || !peopleFiles.length || processing}
+            className="px-5 py-2 rounded-lg text-sm font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            style={{ background: "var(--c-primary)", color: "var(--c-bg-page)" }}>
+            {processing ? "Processing…" : "Analyze Readiness"}
           </button>
+          {/* Inline validation hint — surfaces missing required files when Analyze is disabled */}
+          {!hasData && !processing && (!litmosFiles.length || !cipFiles.length || !peopleFiles.length) && (
+            <span className="text-xs" style={{ color: "var(--c-yellow)" }}>
+              Missing required:{" "}
+              {[!litmosFiles.length && "Litmos Course Data", !peopleFiles.length && "Litmos People Report", !cipFiles.length && "Nesting / CIP Export"].filter(Boolean).join(", ")}
+            </span>
+          )}
           {hasData && (
             <>
-              <button onClick={handleExport} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:bg-purple-900/30" style={{ borderColor: "#4D1F3B", color: "#b8a5d4" }}>
+              <button onClick={handleExport} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:bg-purple-900/30" style={{ borderColor: "var(--c-border-strong)", color: "var(--c-text-muted)" }}>
                 Export CSV
               </button>
-              <button onClick={handleExportIssues} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:brightness-110" style={{ borderColor: "#FFE566", color: "#FFE566" }}>
+              <button onClick={handleExportIssues} className="px-4 py-2 rounded-lg text-sm font-semibold border transition-all hover:brightness-110" style={{ borderColor: "var(--c-yellow)", color: "var(--c-yellow)" }}>
                 Export Issues
               </button>
-              <button onClick={() => setShowEmail(true)} className="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:brightness-110" style={{ background: "#FF66C4", color: "#fff" }}>
+              <button onClick={() => setShowEmail(true)} className="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:brightness-110" style={{ background: "var(--c-pink)", color: "#fff" }}>
                 Generate Email
               </button>
             </>
@@ -1171,8 +1202,8 @@ export default function ProductionReadinessChecker() {
             <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #3d2057" }}>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead>
-                    <tr style={{ background: "#1a0d2e" }}>
+                  <thead className="sticky top-0 z-10">
+                    <tr style={{ background: "#1a0d2e", boxShadow: "0 1px 0 #3d2057" }}>
                       <th className="text-left px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Agent</th>
                       <th className="text-left px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>CIP Status</th>
                       <th className="text-center px-3 py-2.5 font-semibold text-xs uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Litmos</th>

@@ -1,3 +1,61 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Cosmic brand palette — design tokens.
+ *
+ * Use these CSS variables instead of hardcoded hex values for any new code.
+ * Existing inline styles will migrate to these gradually.
+ *
+ * Usage in inline styles:
+ *   style={{ background: "var(--c-bg)", color: "var(--c-text)" }}
+ *
+ * Usage in Tailwind arbitrary values:
+ *   className="bg-[var(--c-bg)] text-[var(--c-text)]"
+ */
+:root {
+  /* Backgrounds */
+  --c-bg-page: #27133A;          /* Page background — Deep Purple */
+  --c-bg-panel: #1a0d2e;         /* Card/panel background — darker purple */
+
+  /* Borders */
+  --c-border: #3d2057;           /* Default panel border */
+  --c-border-strong: #4D1F3B;    /* Heavier border (Crimson Nova) */
+
+  /* Text */
+  --c-text: #E8DFF6;             /* Primary text — Stellar Haze */
+  --c-text-muted: #b8a5d4;       /* Secondary text */
+  --c-text-dim: #7a5f9a;         /* Labels, hints */
+  --c-text-faint: #5c3d7a;       /* Footnotes, very dim */
+
+  /* Brand accents */
+  --c-primary: #8F68D3;          /* Starlight Purple — primary actions */
+  --c-primary-soft: #794EC2;     /* Orion Violet — softer primary */
+  --c-pink: #FF66C4;             /* Nebula Pink — accents, CTAs */
+  --c-orange: #FF7866;           /* Cosmic Orange — alerts, errors */
+  --c-yellow: #FFE566;           /* Solar Flare — warnings */
+
+  /* Semantic colors */
+  --c-success: #4ade80;          /* Green for "done" / "ready" */
+  --c-success-bg: #1a4d2e;       /* Success background tint */
+  --c-warning: #FFE566;
+  --c-warning-bg: #4D1F3B;
+  --c-error: #FF7866;
+  --c-error-bg: #3d1525;
+
+  /* Misc */
+  --c-litmos-dot-done: #22c55e;
+}
+
+/* Smooth all transitions globally — feels more premium */
+* {
+  transition-property: background-color, border-color, color, fill, stroke, opacity, box-shadow, transform;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+/* Disable transitions for users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
