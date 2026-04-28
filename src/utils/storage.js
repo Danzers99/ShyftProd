@@ -45,38 +45,51 @@ async function tx(mode, fn) {
 }
 
 /**
- * Save the current snapshot. Also writes a dated history entry so we can
- * track changes over time (e.g. "X new agents in production since yesterday").
+ * Save the current snapshot (overwrites any previous "current"). The dated
+ * history entry is written separately by saveHistoryEntry — that lets the
+ * caller persist the rich agent-level digest AFTER the results useMemo has
+ * computed flags, instead of duplicating that logic inline in handleProcess.
  * @param {object} snapshot - { parsedData, fileMeta }
- * @param {object} stats - Computed stats summary (small) for fast trend lookup
- *                         without needing to re-run the heavy useMemo on history.
  */
-export async function saveSnapshot(snapshot, stats) {
+export async function saveSnapshot(snapshot) {
   const now = Date.now();
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const fullPayload = { ...snapshot, savedAt: now };
-
-  // History entry — much smaller. Just stats + minimal agent identity (SID + status)
-  // for diff calculations. We don't need to store the full parsed CSVs in history,
-  // just enough to answer "who was in production yesterday vs today?"
-  const historyPayload = {
-    savedAt: now,
-    date: today,
-    stats: stats || null,
-    // Keep just SID + key flags per agent for diffing
-    agentSnapshot: snapshot.agentDigest || null,
-  };
-
   try {
     await tx("readwrite", store => {
       store.put(fullPayload, SNAPSHOT_KEY);
-      store.put(historyPayload, `history-${today}`);
     });
-    // Prune history older than retention window (best-effort, don't block)
+    return now;
+  } catch (e) {
+    console.error("Failed to save snapshot:", e);
+    return null;
+  }
+}
+
+/**
+ * Write a dated history entry for trend/diff analysis. Idempotent on the
+ * date key — re-analyzing the same day overwrites today's entry, which is
+ * the desired behavior (latest snapshot wins).
+ *
+ * @param {object} entry - { savedAt, stats, agentSnapshot }
+ *   agentSnapshot includes: { inProductionSids, inPipelineSids, agents: {sid: state} }
+ *   where state is a small per-agent flag bag for daily-diff computation.
+ */
+export async function saveHistoryEntry({ savedAt, stats, agentSnapshot }) {
+  const date = new Date(savedAt || Date.now()).toISOString().slice(0, 10);
+  const payload = {
+    savedAt: savedAt || Date.now(),
+    date,
+    stats: stats || null,
+    agentSnapshot: agentSnapshot || null,
+  };
+  try {
+    await tx("readwrite", store => {
+      store.put(payload, `history-${date}`);
+    });
     pruneHistory().catch(e => console.error("History prune failed:", e));
     return true;
   } catch (e) {
-    console.error("Failed to save snapshot:", e);
+    console.error("Failed to save history entry:", e);
     return false;
   }
 }

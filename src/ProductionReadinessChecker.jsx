@@ -1,6 +1,8 @@
-import { useState, useMemo, useCallback, useEffect, useDeferredValue } from "react";
+import { useState, useMemo, useCallback, useEffect, useDeferredValue, useRef } from "react";
 import { useToast } from "./components/Toast";
-import { saveSnapshot, loadSnapshot, clearSnapshot, isStale, formatLoadedTime, loadHistory, clearAllHistory } from "./utils/storage";
+import { saveSnapshot, saveHistoryEntry, loadSnapshot, clearSnapshot, isStale, formatLoadedTime, loadHistory, clearAllHistory } from "./utils/storage";
+import { computeDailyDiff, buildAgentDigest, DIFF_CATEGORIES } from "./utils/dailyDiff";
+import { readUrlState, writeUrlState } from "./utils/urlState";
 import { identifyFile, validateSlot } from "./utils/schemaValidation";
 import { REQUIRED_LITMOS, SHORT_LITMOS, ROSTER_COURSES, NESTING_COURSES, FL_BLUE_LEGACY, SHYFTOFF_COURSES } from "./utils/constants";
 import { parseCSV } from "./parsers/parseCSV";
@@ -38,15 +40,18 @@ export default function ProductionReadinessChecker() {
   const [navData, setNavData] = useState(null);
   const [peopleData, setPeopleData] = useState(null);
   const [processing, setProcessing] = useState(false);
-  const [search, setSearch] = useState("");
+  // Hydrate filter / search / open-sections from the URL on first render so
+  // shared links and reloads preserve the view. Lazy initializers run once.
+  const initialUrlState = useMemo(() => readUrlState(), []);
+  const [search, setSearch] = useState(initialUrlState?.search || "");
   // useDeferredValue lets the input update synchronously while the
   // expensive filter+render of 600+ agents is debounced into the
   // next paint frame. Keeps typing snappy.
   const deferredSearch = useDeferredValue(search);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState(initialUrlState?.filter || "all");
   const [expandedRow, setExpandedRow] = useState(null);
   const [showEmail, setShowEmail] = useState(false);
-  const [openSections, setOpenSections] = useState(new Set(["outreach", "health", "creds"]));
+  const [openSections, setOpenSections] = useState(initialUrlState?.sections || new Set(["diff", "outreach", "health", "creds"]));
   const [copiedIdx, setCopiedIdx] = useState(null);
   const [showDetailCols, setShowDetailCols] = useState(false);
   // Persistence state
@@ -143,28 +148,28 @@ export default function ProductionReadinessChecker() {
     loadHistory().then(setHistory).catch(() => setHistory([]));
   }, [savedAt]); // refresh when a new snapshot is saved
 
-  // Compute today vs yesterday delta for the dashboard insight strip.
-  const trendInsights = useMemo(() => {
+  // Compute the rich daily diff (newly credentialed, completed Litmos, status
+  // moves, new/resolved issues, etc.). Pure function lives in utils/dailyDiff
+  // and is unit-tested. Returns null when fewer than 2 days of history exist.
+  const dailyDiff = useMemo(() => {
     if (history.length < 2) return null;
-    const [today, prev] = history; // sorted desc
-    const todaySet = new Set(today.agentSnapshot?.inProductionSids || []);
-    const prevSet = new Set(prev.agentSnapshot?.inProductionSids || []);
-    const newToProduction = [...todaySet].filter(s => !prevSet.has(s));
-    const leftProduction = [...prevSet].filter(s => !todaySet.has(s));
-    const todayPipe = new Set(today.agentSnapshot?.inPipelineSids || []);
-    const prevPipe = new Set(prev.agentSnapshot?.inPipelineSids || []);
-    const newToPipeline = [...todayPipe].filter(s => !prevPipe.has(s));
-    const leftPipeline = [...prevPipe].filter(s => !todayPipe.has(s));
-    return {
-      previousDate: prev.date,
-      newToProduction: newToProduction.length,
-      leftProduction: leftProduction.length,
-      newToPipeline: newToPipeline.length,
-      leftPipeline: leftPipeline.length,
-      newToProductionSids: newToProduction,
-      leftProductionSids: leftProduction,
-    };
+    const [today, prev] = history; // sorted desc by savedAt
+    return computeDailyDiff(today, prev);
   }, [history]);
+
+  // Sync URL whenever filter / search / openSections change so the address bar
+  // is always shareable. replaceState avoids polluting the back button.
+  useEffect(() => {
+    writeUrlState({ filter, search, sections: openSections });
+  }, [filter, search, openSections]);
+
+  // Track which Daily Diff category cards have their agent list expanded.
+  const [openDiffCats, setOpenDiffCats] = useState(new Set());
+  const toggleDiffCat = (key) => setOpenDiffCats(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
 
   const toggleSection = (key) => setOpenSections(prev => {
     const next = new Set(prev);
@@ -206,7 +211,10 @@ export default function ProductionReadinessChecker() {
       setNavData(navRows);
       setPeopleData(pplRows);
 
-      // Persist to IndexedDB so the data survives page refreshes
+      // Persist to IndexedDB so the data survives page refreshes.
+      // The dated history entry (with the rich agent digest) is written by a
+      // separate effect below — once `results` has computed all the per-agent
+      // flags. This avoids duplicating that computation here.
       const meta = {
         litmos: litmosFiles.map(f => ({ name: f.name, size: f.size })),
         cip: cipFiles.map(f => ({ name: f.name, size: f.size })),
@@ -214,33 +222,7 @@ export default function ProductionReadinessChecker() {
         nav: navFiles.map(f => ({ name: f.name, size: f.size })),
         people: peopleFiles.map(f => ({ name: f.name, size: f.size })),
       };
-      const now = Date.now();
-
-      // Build a compact agent digest for the daily history entry.
-      // Stores just enough to answer "who was in production yesterday vs today?"
-      // and other day-over-day diffs without persisting full parsed CSVs for 30 days.
-      const inProduction = new Set();
-      prodRows.forEach(r => {
-        const sid = (r.so_agent_id || r.shyftoff_id || "").trim();
-        if (sid) inProduction.add(sid);
-      });
-      const inPipeline = new Set();
-      cipRows.forEach(r => {
-        const sid = (r.shyftoff_id || "").trim();
-        if (sid) inPipeline.add(sid);
-      });
-      const agentDigest = {
-        inProductionSids: [...inProduction],
-        inPipelineSids: [...inPipeline],
-      };
-      const statsDigest = {
-        pipelineTotal: inPipeline.size,
-        productionTotal: inProduction.size,
-        litmosPeople: pplRows.length,
-        navAttended: navRows.length,
-      };
-
-      await saveSnapshot({
+      const savedNow = await saveSnapshot({
         parsedData: {
           litmosData: litRows,
           cipData: cipRows,
@@ -249,9 +231,8 @@ export default function ProductionReadinessChecker() {
           peopleData: pplRows,
         },
         fileMeta: meta,
-        agentDigest,
-      }, statsDigest);
-      setSavedAt(now);
+      });
+      setSavedAt(savedNow || Date.now());
       setFileMeta(meta);
       const totalRows = litRows.length + cipRows.length + prodRows.length + navRows.length + pplRows.length;
       toast.success(`Analyzed ${totalRows.toLocaleString()} rows · saved to cache`);
@@ -627,6 +608,28 @@ export default function ProductionReadinessChecker() {
     };
   }, [prodAgents]);
 
+  // Write the rich dated history entry once results have been computed.
+  // Guarded by a ref so we don't re-write when unrelated state changes.
+  // Triggers exactly once per Analyze cycle (savedAt changes on each run).
+  const lastHistoryWriteRef = useRef(null);
+  useEffect(() => {
+    if (!results || !savedAt) return;
+    if (lastHistoryWriteRef.current === savedAt) return;
+    lastHistoryWriteRef.current = savedAt;
+    const agentSnapshot = buildAgentDigest(results, prodAgents);
+    saveHistoryEntry({
+      savedAt,
+      agentSnapshot,
+      stats: {
+        pipelineTotal: results.length,
+        productionTotal: prodAgents.length,
+      },
+    })
+      .then(() => loadHistory())
+      .then(setHistory)
+      .catch(e => console.error("History write failed:", e));
+  }, [results, prodAgents, savedAt]);
+
   const filtered = useMemo(() => {
     if (!results) return [];
     // Production filters return prod agents instead of pipeline agents
@@ -973,25 +976,6 @@ export default function ProductionReadinessChecker() {
             </div>
           </div>
         )}
-        {/* Day-over-day trend insight — only shown when 2+ days of history exist */}
-        {trendInsights && (
-          <div className="mb-3 rounded-lg px-3 py-2 flex items-center gap-4 text-xs"
-            style={{ background: "#1a0d2e", border: "1px solid #3d2057" }}>
-            <span className="font-semibold uppercase tracking-wider" style={{ color: "#7a5f9a" }}>Since {trendInsights.previousDate}</span>
-            <span style={{ color: trendInsights.newToProduction > 0 ? "#4ade80" : "#5c3d7a" }}>
-              ▲ {trendInsights.newToProduction} new in production
-            </span>
-            <span style={{ color: trendInsights.leftProduction > 0 ? "#FF7866" : "#5c3d7a" }}>
-              ▼ {trendInsights.leftProduction} left production
-            </span>
-            <span style={{ color: trendInsights.newToPipeline > 0 ? "#8F68D3" : "#5c3d7a" }}>
-              ▲ {trendInsights.newToPipeline} new in pipeline
-            </span>
-            <span style={{ color: trendInsights.leftPipeline > 0 ? "#b8a5d4" : "#5c3d7a" }}>
-              ▼ {trendInsights.leftPipeline} left pipeline
-            </span>
-          </div>
-        )}
         <div className="grid grid-cols-5 gap-3 mb-4">
           <FileUpload required label="Litmos Course Data" sublabel="CSV with per-course completions" onFiles={f => handleFiles("litmos", setLitmosFiles, f)} multiple files={litmosFiles} validation={fileTypes.litmos} />
           <FileUpload required label="Litmos People Report" sublabel="Who has a Litmos account" onFiles={f => handleFiles("people", setPeopleFiles, f)} multiple={false} files={peopleFiles} validation={fileTypes.people} />
@@ -1038,6 +1022,74 @@ export default function ProductionReadinessChecker() {
               <StatCard label="ShyftOff Cert" value={stats.shyftoffDone} sub="100% certification progress" color="#FF66C4" />
               <StatCard label="Nav Meeting" value={stats.navAttended} sub={stats.navAvailable ? "Confirmed attended" : "No data uploaded"} color={stats.navAvailable ? "#FFE566" : "#5c3d7a"} />
             </div>
+
+            {/* === SECTION: Daily Diff (only when 2+ days of history) === */}
+            {dailyDiff && dailyDiff.totalChanges > 0 && (
+              <div className="mb-3 rounded-xl overflow-hidden" style={{ border: "1px solid var(--c-border)" }}>
+                <button onClick={() => toggleSection("diff")} className="w-full flex items-center justify-between px-4 py-2.5 transition-all hover:brightness-110" style={{ background: "var(--c-bg-panel)" }}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs" style={{ color: "var(--c-text-dim)" }}>{openSections.has("diff") ? "▾" : "▸"}</span>
+                    <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--c-text-dim)" }}>Daily Changes</span>
+                    <span className="text-xs" style={{ color: "var(--c-text-faint)" }}>since {dailyDiff.previousDate}</span>
+                  </div>
+                  <div className="text-xs" style={{ color: "var(--c-text-muted)" }}>
+                    <span className="font-semibold" style={{ color: "var(--c-primary)" }}>{dailyDiff.totalChanges}</span>
+                    <span> change{dailyDiff.totalChanges === 1 ? "" : "s"}</span>
+                  </div>
+                </button>
+                {openSections.has("diff") && (
+                  <div className="px-4 py-3 grid grid-cols-3 gap-2" style={{ background: "var(--c-bg-page)" }}>
+                    {DIFF_CATEGORIES.map(cat => {
+                      const data = dailyDiff[cat.key];
+                      if (!data || data.count === 0) return null;
+                      const isOpen = openDiffCats.has(cat.key);
+                      return (
+                        <div key={cat.key}
+                          className="rounded-lg overflow-hidden"
+                          style={{
+                            background: cat.tone === "bad" ? "rgba(255,120,102,0.05)" : cat.tone === "good" ? "rgba(74,222,128,0.05)" : "var(--c-bg-panel)",
+                            border: `1px solid ${cat.tone === "bad" ? "var(--c-orange)" : cat.tone === "good" ? "var(--c-success)" : "var(--c-border)"}`,
+                          }}>
+                          <button onClick={() => toggleDiffCat(cat.key)} className="w-full text-left px-3 py-2 transition-all hover:brightness-110">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-semibold flex items-center gap-2" style={{ color: cat.color }}>
+                                <span>{cat.icon}</span>
+                                <span>{cat.label}</span>
+                              </span>
+                              <span className="text-lg font-black" style={{ color: cat.color }}>{data.count}</span>
+                            </div>
+                            {data.count > 0 && (
+                              <div className="text-[10px] mt-0.5" style={{ color: "var(--c-text-faint)" }}>
+                                {isOpen ? "▾ Click to collapse" : "▸ Click to see who"}
+                              </div>
+                            )}
+                          </button>
+                          {isOpen && (
+                            <div className="px-3 pb-2 max-h-48 overflow-y-auto" style={{ borderTop: `1px solid ${cat.color}33` }}>
+                              {data.agents.slice(0, 50).map((a, i) => (
+                                <div key={`${a.sid}-${i}`} className="text-xs py-0.5 flex items-center justify-between gap-2" style={{ color: "var(--c-text-muted)" }}>
+                                  <span className="truncate">{a.name}</span>
+                                  <span className="text-[10px]" style={{ color: "var(--c-text-faint)" }}>
+                                    {a.before !== undefined && a.after !== undefined
+                                      ? `${a.before} → ${a.after}`
+                                      : a.flag
+                                        ? a.flag.replace(/^is|^needs/, "").replace(/([A-Z])/g, " $1").trim().toLowerCase()
+                                        : a.status || ""}
+                                  </span>
+                                </div>
+                              ))}
+                              {data.agents.length > 50 && (
+                                <div className="text-[10px] mt-1" style={{ color: "var(--c-text-faint)" }}>… and {data.agents.length - 50} more</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* === SECTION: Action Items === */}
             <div className="mb-3 rounded-xl overflow-hidden" style={{ border: "1px solid #3d2057" }}>
