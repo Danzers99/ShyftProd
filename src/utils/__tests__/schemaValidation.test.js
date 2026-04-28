@@ -46,6 +46,22 @@ describe("identifyFile", () => {
     expect(identifyFile(headers, {}).kind).toBe("shyftnav");
   });
 
+  it("identifies Removed Reports export by 'Removed' status", () => {
+    const headers = ["shyftoff_id", "campaign_application_id", "background_check", "certification_progress", "agent_nm"];
+    expect(identifyFile(headers, { status: "Removed - Certification Stale" }).kind).toBe("removed");
+    expect(identifyFile(headers, { status: "Removed - Performance" }).kind).toBe("removed");
+    expect(identifyFile(headers, { status: "Removed" }).kind).toBe("removed");
+  });
+
+  it("does NOT misidentify CIP as Removed when status doesn't start with Removed", () => {
+    // Regression guard: same column set, different status. CIP must still
+    // resolve to "cip" (or roster/nesting where applicable).
+    const headers = ["shyftoff_id", "campaign_application_id", "background_check", "certification_progress", "agent_nm"];
+    expect(identifyFile(headers, { status: "Roster - Credentials Requested" }).kind).toBe("cip");
+    expect(identifyFile(headers, { status: "Nesting - First Call" }).kind).toBe("cip");
+    expect(identifyFile(headers, { status: "Production" }).kind).toBe("production-export");
+  });
+
   it("returns unknown for unrecognized headers", () => {
     expect(identifyFile(["foo", "bar", "baz"], {}).kind).toBe("unknown");
   });
@@ -61,6 +77,14 @@ describe("validateSlot", () => {
     expect(validateSlot("cip", "nesting")).toBe(null);
     expect(validateSlot("prod", "production")).toBe(null);
     expect(validateSlot("prod", "production-export")).toBe(null);
+    expect(validateSlot("removed", "removed")).toBe(null);
+  });
+
+  it("rejects a Removed export dropped into the CIP slot", () => {
+    // Critical regression guard — if removed data leaks into the active
+    // pipeline calculation, "removed" agents would re-appear as ghosts /
+    // bg mismatches / etc. The schema check must catch this.
+    expect(validateSlot("cip", "removed")).not.toBe(null);
   });
 
   it("rejects mismatched files (Litmos in Nav slot)", () => {

@@ -11,6 +11,7 @@
 //   { kind: "production", label: "Production Agents (simple)" }
 //   { kind: "production-export", label: "Production Export (JSON)" }
 //   { kind: "shyftnav", label: "ShyftNav Export" }
+//   { kind: "removed", label: "Removed Reports Export" }
 //   { kind: "unknown", label: "Unknown format" }
 
 const SIGNATURES = [
@@ -30,6 +31,14 @@ const SIGNATURES = [
     label: "Production Export (JSON cert progress)",
     matchesAll: ["shyftoff_id", "campaign_application_id", "background_check", "certification_progress"],
     requiresStatus: "Production",
+  },
+  {
+    // Same 45-col schema as CIP, distinguished by "Removed - …" status.
+    // MUST come before the "cip" signature since they share matchesAll.
+    kind: "removed",
+    label: "Removed Reports Export",
+    matchesAll: ["shyftoff_id", "campaign_application_id", "background_check", "certification_progress"],
+    requiresStatusContains: "Removed",
   },
   {
     kind: "cip",
@@ -67,6 +76,7 @@ export const SLOT_EXPECTATIONS = {
   cip: ["cip", "roster", "nesting", "production-export"],
   prod: ["production", "production-export"],
   nav: ["shyftnav"],
+  removed: ["removed"],
 };
 
 /**

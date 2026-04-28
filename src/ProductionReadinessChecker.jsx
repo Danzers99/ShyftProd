@@ -11,6 +11,7 @@ import { parseCertProgress } from "./parsers/parseCertProgress";
 import { dedupCipData } from "./parsers/dedupCipData";
 import { resolveBgStatus } from "./parsers/resolveBgStatus";
 import { buildProdCampaignMaps, isInProdForCampaign, getProdCampaigns } from "./parsers/prodCampaigns";
+import { buildRemovalHistoryMap, annotateAgentRemoval } from "./parsers/parseRemovedExport";
 import Badge from "./components/Badge";
 import StatCard from "./components/StatCard";
 import CourseDot from "./components/CourseDot";
@@ -34,11 +35,15 @@ export default function ProductionReadinessChecker() {
   const [prodFiles, setProdFiles] = useState([]);
   const [navFiles, setNavFiles] = useState([]);
   const [peopleFiles, setPeopleFiles] = useState([]);
+  const [removedFiles, setRemovedFiles] = useState([]);
   const [litmosData, setLitmosData] = useState(null);
   const [cipData, setCipData] = useState(null);
   const [prodData, setProdData] = useState(null);
   const [navData, setNavData] = useState(null);
   const [peopleData, setPeopleData] = useState(null);
+  // Removed Reports — entirely optional. When null, all downstream flag
+  // computation skips and the dashboard behaves exactly as before.
+  const [removedData, setRemovedData] = useState(null);
   const [processing, setProcessing] = useState(false);
   // Hydrate filter / search / open-sections from the URL on first render so
   // shared links and reloads preserve the view. Lazy initializers run once.
@@ -72,6 +77,7 @@ export default function ProductionReadinessChecker() {
           setProdData(snap.parsedData?.prodData || null);
           setNavData(snap.parsedData?.navData || null);
           setPeopleData(snap.parsedData?.peopleData || null);
+          setRemovedData(snap.parsedData?.removedData || null);
           setSavedAt(snap.savedAt);
           setFileMeta(snap.fileMeta || null);
           if (isStale(snap.savedAt)) {
@@ -130,11 +136,13 @@ export default function ProductionReadinessChecker() {
     setProdData(null);
     setNavData(null);
     setPeopleData(null);
+    setRemovedData(null);
     setLitmosFiles([]);
     setCipFiles([]);
     setProdFiles([]);
     setNavFiles([]);
     setPeopleFiles([]);
+    setRemovedFiles([]);
     setSavedAt(null);
     setFileMeta(null);
     setFileTypes({});
@@ -198,18 +206,21 @@ export default function ProductionReadinessChecker() {
   const handleProcess = useCallback(async () => {
     setProcessing(true);
     try {
-      const [litRows, cipRows, prodRows, navRows, pplRows] = await Promise.all([
+      const [litRows, cipRows, prodRows, navRows, pplRows, rmvRows] = await Promise.all([
         litmosFiles.length ? readFiles(litmosFiles) : Promise.resolve([]),
         cipFiles.length ? readFiles(cipFiles) : Promise.resolve([]),
         prodFiles.length ? readFiles(prodFiles) : Promise.resolve([]),
         navFiles.length ? readFiles(navFiles) : Promise.resolve([]),
         peopleFiles.length ? readFiles(peopleFiles) : Promise.resolve([]),
+        removedFiles.length ? readFiles(removedFiles) : Promise.resolve([]),
       ]);
       setLitmosData(litRows);
       setCipData(cipRows);
       setProdData(prodRows);
       setNavData(navRows);
       setPeopleData(pplRows);
+      // Only set removedData if the user uploaded files. null = feature off.
+      setRemovedData(removedFiles.length ? rmvRows : null);
 
       // Persist to IndexedDB so the data survives page refreshes.
       // The dated history entry (with the rich agent digest) is written by a
@@ -221,6 +232,7 @@ export default function ProductionReadinessChecker() {
         prod: prodFiles.map(f => ({ name: f.name, size: f.size })),
         nav: navFiles.map(f => ({ name: f.name, size: f.size })),
         people: peopleFiles.map(f => ({ name: f.name, size: f.size })),
+        removed: removedFiles.map(f => ({ name: f.name, size: f.size })),
       };
       const savedNow = await saveSnapshot({
         parsedData: {
@@ -229,19 +241,28 @@ export default function ProductionReadinessChecker() {
           prodData: prodRows,
           navData: navRows,
           peopleData: pplRows,
+          removedData: removedFiles.length ? rmvRows : null,
         },
         fileMeta: meta,
       });
       setSavedAt(savedNow || Date.now());
       setFileMeta(meta);
-      const totalRows = litRows.length + cipRows.length + prodRows.length + navRows.length + pplRows.length;
+      const totalRows = litRows.length + cipRows.length + prodRows.length + navRows.length + pplRows.length + rmvRows.length;
       toast.success(`Analyzed ${totalRows.toLocaleString()} rows · saved to cache`);
     } catch (e) {
       console.error("handleProcess failed:", e);
       toast.error(`Analysis failed: ${e.message}`);
     }
     setProcessing(false);
-  }, [litmosFiles, cipFiles, prodFiles, navFiles, peopleFiles, toast]);
+  }, [litmosFiles, cipFiles, prodFiles, navFiles, peopleFiles, removedFiles, toast]);
+
+  // Removal history lookup. Built once per uploaded Removed Reports file and
+  // reused by both pipeline and production agent annotations. Null when no
+  // removed file is uploaded — every downstream branch checks for null.
+  const removalMap = useMemo(() => {
+    if (!removedData || !removedData.length) return null;
+    return buildRemovalHistoryMap(removedData);
+  }, [removedData]);
 
   const results = useMemo(() => {
     if (!litmosData || !cipData) return null;
@@ -497,6 +518,11 @@ export default function ProductionReadinessChecker() {
       else if (!rosterCoursesDone && bgCleared) credentialNote = "BG cleared — NB Certification in progress";
       else credentialNote = "NB Certification in progress";
 
+      // Removal annotation — null when no Removed Reports file uploaded
+      // (or this SID has no removal history). Spreads zero new fields when
+      // null, preserving backward-compatible agent shape.
+      const removal = removalMap ? annotateAgentRemoval(removalMap, sid) : null;
+
       agents.push({
         name, sid, status, key,
         nbEmail: ldata?.email || "",
@@ -517,11 +543,12 @@ export default function ProductionReadinessChecker() {
         isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed, needsNavOutreach, needsNestingBump,
         isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
         credentialNote,
+        ...(removal || {}),
       });
     });
 
     return agents;
-  }, [litmosData, cipData, prodData, navData, peopleData]);
+  }, [litmosData, cipData, prodData, navData, peopleData, removalMap]);
 
   // Process production agents for FL Blue tracking
   // Production data can come in two formats:
@@ -581,6 +608,14 @@ export default function ProductionReadinessChecker() {
         ? [singleCampaign]
         : campaignList.split(/[;,]/).map(c => c.trim()).filter(Boolean);
 
+      // Removal annotation + the "removed today AND in prod today" anomaly
+      // flag — surfaces records where the source system has the same agent
+      // marked as removed and active simultaneously (3 cases observed at the
+      // time this was added). These are typically data-correction candidates
+      // the ops team should investigate.
+      const removal = removalMap ? annotateAgentRemoval(removalMap, sid) : null;
+      const removedTodayInProd = !!(removalMap && removalMap.removedTodaySids?.has(sid));
+
       return {
         name, sid, isProd: true,
         certPct: certPct !== null ? certPct : (flBlueDone !== null ? null : null),
@@ -591,9 +626,11 @@ export default function ProductionReadinessChecker() {
         status: r.agent_campaign_status || r.status || "Production",
         bgStatus: (r.background_check_status || "").trim().toLowerCase(),
         prodCampaigns: campaigns,
+        ...(removal || {}),
+        removedTodayInProd,
       };
     });
-  }, [prodData]);
+  }, [prodData, removalMap]);
 
   const prodStats = useMemo(() => {
     if (!prodAgents.length) return null;
@@ -663,6 +700,9 @@ export default function ProductionReadinessChecker() {
     if (filter === "campaign_eng") out = out.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign));
     if (filter === "campaign_bi") out = out.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign));
     if (filter === "campaign_both") out = out.filter(a => a.rowCampaign && /nations/i.test(a.rowCampaign) && a.prodCampaigns && a.prodCampaigns.length > 0);
+    if (filter === "returning") out = out.filter(a => a.wasRemoved);
+    if (filter === "returning_prod") out = out.filter(a => a.wasRemoved && a.previouslyInProd);
+    if (filter === "returning_repeat") out = out.filter(a => a.wasRemoved && a.removalCount > 1);
     if (deferredSearch) {
       const s = deferredSearch.toLowerCase();
       out = out.filter(a => a.name.toLowerCase().includes(s) || a.sid.toLowerCase().includes(s) || (a.nbEmail || "").toLowerCase().includes(s));
@@ -700,6 +740,10 @@ export default function ProductionReadinessChecker() {
       biPipeline: results.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign)).length,
       crossoverEngReady: results.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign) && a.readyStatus === "ready" && a.prodCampaigns && a.prodCampaigns.some(c => /bilingual/i.test(c))).length,
       crossoverBiReady: results.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign) && a.readyStatus === "ready" && a.prodCampaigns && a.prodCampaigns.some(c => !/bilingual/i.test(c) && /nations/i.test(c))).length,
+      // Returning-agent counts (only meaningful when removed file is uploaded — otherwise all 0)
+      returning: results.filter(a => a.wasRemoved).length,
+      returningPreviouslyInProd: results.filter(a => a.wasRemoved && a.previouslyInProd).length,
+      returningMultipleTimes: results.filter(a => a.wasRemoved && a.removalCount > 1).length,
     };
   }, [results]);
 
@@ -976,12 +1020,13 @@ export default function ProductionReadinessChecker() {
             </div>
           </div>
         )}
-        <div className="grid grid-cols-5 gap-3 mb-4">
+        <div className="grid grid-cols-6 gap-3 mb-4">
           <FileUpload required label="Litmos Course Data" sublabel="CSV with per-course completions" onFiles={f => handleFiles("litmos", setLitmosFiles, f)} multiple files={litmosFiles} validation={fileTypes.litmos} />
           <FileUpload required label="Litmos People Report" sublabel="Who has a Litmos account" onFiles={f => handleFiles("people", setPeopleFiles, f)} multiple={false} files={peopleFiles} validation={fileTypes.people} />
           <FileUpload required label="Nesting / CIP Export" sublabel="Dashboard or CIP agent export" onFiles={f => handleFiles("cip", setCipFiles, f)} multiple files={cipFiles} validation={fileTypes.cip} />
           <FileUpload label="Production Exports" sublabel="Exclude current prod agents" onFiles={f => handleFiles("prod", setProdFiles, f)} multiple files={prodFiles} validation={fileTypes.prod} />
           <FileUpload label="Nav Meeting Tracker" sublabel="Upload multiple ShyftNav exports — duplicates auto-deduped" onFiles={f => handleFiles("nav", setNavFiles, f)} multiple files={navFiles} validation={fileTypes.nav} />
+          <FileUpload label="Removed Reports" sublabel="Optional — surfaces returning-agent context (last 180 days)" onFiles={f => handleFiles("removed", setRemovedFiles, f)} multiple files={removedFiles} validation={fileTypes.removed} />
         </div>
 
         <div className="flex gap-2 mb-5 items-center flex-wrap">
@@ -1174,6 +1219,32 @@ export default function ProductionReadinessChecker() {
                   </button>
                 </div>
               )}
+              {/* Returning agents — only when Removed Reports file is uploaded */}
+              {openSections.has("health") && removalMap && (
+                <div className="px-4 pb-3 grid grid-cols-3 gap-2" style={{ background: "#27133A" }}>
+                  <button onClick={() => setFilter(filter === "returning" ? "all" : "returning")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "returning" ? "#794EC244" : "#794EC222", border: `1px solid ${filter === "returning" ? "#8F68D3" : "#794EC2"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold flex items-center gap-1" style={{ color: "#8F68D3" }}>↩ Returning Agents</span>
+                      <span className="text-xl font-black" style={{ color: "#8F68D3" }}>{stats.returning}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>Currently in pipeline but previously removed. Useful coaching context.</div>
+                  </button>
+                  <button onClick={() => setFilter(filter === "returning_prod" ? "all" : "returning_prod")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "returning_prod" ? "#3d152544" : "#3d152522", border: `1px solid ${filter === "returning_prod" ? "#FF7866" : "#4D1F3B"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#FF7866" }}>Previously in Production</span>
+                      <span className="text-xl font-black" style={{ color: "#FF7866" }}>{stats.returningPreviouslyInProd}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>Reached production before, fell off (Performance / Production Stale), and are back.</div>
+                  </button>
+                  <button onClick={() => setFilter(filter === "returning_repeat" ? "all" : "returning_repeat")} className="text-left rounded-lg p-3 transition-all hover:brightness-110" style={{ background: filter === "returning_repeat" ? "#3d300044" : "#3d300022", border: `1px solid ${filter === "returning_repeat" ? "#FFE566" : "#4D1F3B"}` }}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-xs font-bold" style={{ color: "#FFE566" }}>Multiple Removals</span>
+                      <span className="text-xl font-black" style={{ color: "#FFE566" }}>{stats.returningMultipleTimes}</span>
+                    </div>
+                    <div className="text-xs" style={{ color: "#5c3d7a" }}>Removed 2+ times in the last 180 days. Worth a deeper look.</div>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* === SECTION: Credential Pipeline === */}
@@ -1294,6 +1365,18 @@ export default function ProductionReadinessChecker() {
                               </span>
                             )}
                             {a.isProd && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#794EC2", color: "#E8DFF6", fontSize: 10 }}>PROD{a.prodCampaigns && a.prodCampaigns.length > 0 ? " " + (a.prodCampaigns.some(c => /bilingual/i.test(c)) && a.prodCampaigns.some(c => !/bilingual/i.test(c) && /nations/i.test(c)) ? "BI+ENG" : a.prodCampaigns.some(c => /bilingual/i.test(c)) ? "BI" : "ENG") : ""}</span>}
+                            {a.isProd && a.wasRemoved && (
+                              <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d1525", color: "#FF7866", fontSize: 10 }}
+                                title={`Previously removed ${a.removalCount}× (last: ${a.lastRemovalReason}, ${a.lastRemovalDaysAgo}d ago) — currently back in production.`}>
+                                ↩ COMEBACK
+                              </span>
+                            )}
+                            {a.isProd && a.removedTodayInProd && (
+                              <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d3000", color: "#FFE566", fontSize: 10 }}
+                                title="Source data shows this agent as 'Removed' today AND active in production today. Likely a data correction needed in the source system.">
+                                ⚠ DATA CONFLICT
+                              </span>
+                            )}
                             <button
                               onClick={(e) => handleCopyAgent(a, idx, e)}
                               className="opacity-0 group-hover:opacity-100 transition-opacity px-1.5 py-0.5 rounded text-xs"
@@ -1314,6 +1397,19 @@ export default function ProductionReadinessChecker() {
             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
             {a.hasNameCollision && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#FF66C4", fontSize: 10 }}>⚠ NAME COLLISION</span>}
             {a.needsNestingBump && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#794EC2", color: "#FF66C4", fontSize: 10 }}>NEEDS NESTING BUMP</span>}
+            {a.wasRemoved && (
+              <span
+                className="text-xs px-1.5 py-0 rounded"
+                style={{
+                  background: a.previouslyInProd ? "#3d1525" : "#3d2057",
+                  color: a.previouslyInProd ? "#FF7866" : "#8F68D3",
+                  fontSize: 10,
+                }}
+                title={`Previously removed ${a.removalCount}× (last: ${a.lastRemovalReason}, ${a.lastRemovalDaysAgo}d ago)`}
+              >
+                ↩ RETURNING{a.removalCount > 1 ? ` ×${a.removalCount}` : ""}
+              </span>
+            )}
                           </div>
                           )}
                         </td>
@@ -1444,6 +1540,45 @@ export default function ProductionReadinessChecker() {
                 </div>
                 )}
               </div>
+
+              {/* Removal History — only when removed file uploaded and this agent has history */}
+              {ag.wasRemoved && ag.removalHistory && (
+                <div className="px-4 py-3" style={{ borderBottom: "1px solid #3d2057", background: ag.previouslyInProd ? "#3d152511" : "#27133A" }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: ag.previouslyInProd ? "#FF7866" : "#8F68D3" }}>
+                      ↩ Removal History
+                    </div>
+                    <span className="text-xs" style={{ color: "#7a5f9a" }}>
+                      {ag.removalCount}× in last 180d{ag.previouslyInProd ? " · prior prod" : ""}
+                    </span>
+                  </div>
+                  {ag.removedTodayInProd && (
+                    <div className="text-xs mb-2 px-2 py-1 rounded" style={{ background: "#3d3000", color: "#FFE566", border: "1px solid #FFE566" }}>
+                      ⚠ Data conflict: marked as removed today AND active in production today.
+                    </div>
+                  )}
+                  <div className="space-y-1.5">
+                    {ag.removalHistory.map((h, i) => (
+                      <div key={`${h.date}-${i}`} className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#7a5f9a" }}>{h.date}</span>
+                          <span style={{
+                            color: h.category === "performance" ? "#FF7866"
+                              : h.category === "stale" ? "#FFE566"
+                              : h.category === "voluntary" ? "#b8a5d4"
+                              : h.category === "ops" ? "#8F68D3"
+                              : "#E8DFF6",
+                            fontWeight: 600,
+                          }}>{h.reason}</span>
+                        </div>
+                        <span style={{ color: "#5c3d7a", fontSize: 10 }}>
+                          {h.daysAgo}d ago{h.campaign && /bilingual/i.test(h.campaign) ? " · BI" : h.campaign && /nations/i.test(h.campaign) ? " · ENG" : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Production agent detail */}
               {ag.isProd && (
