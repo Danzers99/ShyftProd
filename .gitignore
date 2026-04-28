@@ -6,3 +6,4 @@ dist
 # Sample data files — keep these out of the repo
 *.csv
 production_readiness_checker.jsx
+scratch/
