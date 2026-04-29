@@ -77,6 +77,175 @@ describe("computeAgentFlags — Needs Nesting Bump (98 stuck agents regression)"
   });
 });
 
+describe("computeAgentFlags — Rehire detection (terminated Litmos credentials)", () => {
+  // Fixed reference time so dates compute deterministically.
+  const NOW = Date.parse("2026-04-29T12:00:00Z");
+  const daysAgo = (n) => new Date(NOW - n * 86400000).toISOString();
+
+  function rehireCtx(overrides = {}) {
+    return ctx({
+      inLitmos: true,
+      now: NOW,
+      ...overrides,
+    });
+  }
+  function rosterRow(extras = {}) {
+    return {
+      shyftoff_id: "S0001",
+      agent_nm: "Test Agent",
+      status: "Roster - Credentials Requested",
+      certification_progress: "25",
+      ...extras,
+    };
+  }
+
+  it("Removed-list alone does NOT trigger isLikelyRehire (would mis-flag re-onboards with fresh creds)", () => {
+    // Agent was removed before, but now has a fresh Litmos account / no old activity.
+    // This is a legitimate re-onboarding — should be bumped, not flagged.
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({
+      removalAnnotation: { wasRemoved: true, lastRemovalReason: "Performance", lastRemovalDaysAgo: 60 },
+      ldata: { courses: {} },
+      litmosAccountCreatedDate: daysAgo(2),
+    }));
+    expect(flags.isLikelyRehire).toBe(false);
+    expect(flags.isRehireFromRemovedList).toBe(true); // diagnostic still tracked
+    expect(flags.needsNestingBump).toBe(true);    // bump still applies
+    expect(flags.needsNewCredentials).toBe(false);
+  });
+
+  it("Removed-list PLUS old completions: rehire fires AND prior-removal appears in signals as context", () => {
+    const ldata = {
+      courses: { "Anti-money Laundering Awareness 4.0 (US)": { completed: true, date: daysAgo(120), pct: 100 } },
+    };
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({
+      ldata,
+      removalAnnotation: { wasRemoved: true, lastRemovalReason: "Production Stale", lastRemovalDaysAgo: 90 },
+    }));
+    expect(flags.isLikelyRehire).toBe(true);
+    expect(flags.needsNestingBump).toBe(false);
+    expect(flags.needsNewCredentials).toBe(true);
+    // Prior removal is included as supporting context
+    expect(flags.rehireSignals.some(s => s.includes("Production Stale"))).toBe(true);
+    expect(flags.rehireSignals.some(s => s.includes("120d"))).toBe(true);
+  });
+
+  it("Signal 2 (behavioral): old completions (>60 days) trip isLikelyRehire", () => {
+    // Build ldata with 3 completions, all 100 days ago
+    const ldata = {
+      email: "agent@example.com",
+      courses: {
+        "Anti-money Laundering Awareness 4.0 (US)": { completed: true, date: daysAgo(100), pct: 100 },
+        "HIPAA Privacy and Security Basics 5.0 (US)": { completed: true, date: daysAgo(100), pct: 100 },
+        "Information Security Basics 3.0": { completed: true, date: daysAgo(100), pct: 100 },
+      },
+    };
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({ ldata }));
+    expect(flags.isLikelyRehire).toBe(true);
+    expect(flags.isRehireBehavioral).toBe(true);
+    expect(flags.daysSinceLastLitmosCompletion).toBe(100);
+    expect(flags.needsNestingBump).toBe(false);
+    expect(flags.needsNewCredentials).toBe(true);
+  });
+
+  it("Signal 2 boundary: completion exactly 60 days ago does NOT trip behavioral signal", () => {
+    const ldata = {
+      courses: { "Anti-money Laundering Awareness 4.0 (US)": { completed: true, date: daysAgo(60), pct: 100 } },
+    };
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({ ldata }));
+    expect(flags.isRehireBehavioral).toBe(false);
+  });
+
+  it("Signal 2: a recent completion within 60 days does NOT trip behavioral", () => {
+    const ldata = {
+      courses: { "Anti-money Laundering Awareness 4.0 (US)": { completed: true, date: daysAgo(15), pct: 100 } },
+    };
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({ ldata }));
+    expect(flags.isRehireBehavioral).toBe(false);
+    expect(flags.isLikelyRehire).toBe(false);
+    expect(flags.needsNestingBump).toBe(true); // legit case
+  });
+
+  it("Signal 3 (stale account): 0 completions + Litmos account >90 days old", () => {
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({
+      ldata: { courses: {} },
+      litmosAccountCreatedDate: daysAgo(150),
+    }));
+    expect(flags.isLikelyRehire).toBe(true);
+    expect(flags.isRehireStaleAccount).toBe(true);
+    expect(flags.litmosAccountAgeDays).toBe(150);
+    expect(flags.needsNestingBump).toBe(false);
+    expect(flags.needsNewCredentials).toBe(true);
+  });
+
+  it("Signal 3 boundary: account exactly 90 days old does NOT trip stale-account signal", () => {
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({
+      ldata: { courses: {} },
+      litmosAccountCreatedDate: daysAgo(90),
+    }));
+    expect(flags.isRehireStaleAccount).toBe(false);
+  });
+
+  it("New hire (legit): no signals fire — needsNestingBump remains true", () => {
+    // Brand new account, no completions yet, not in removed-export
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({
+      ldata: { courses: {} },
+      litmosAccountCreatedDate: daysAgo(5),
+    }));
+    expect(flags.isLikelyRehire).toBe(false);
+    expect(flags.needsNestingBump).toBe(true);
+    expect(flags.needsNewCredentials).toBe(false);
+  });
+
+  it("Backward compatible: missing rehire context does NOT change existing behavior", () => {
+    // The original test from the existing suite — should still pass with new code
+    const row = rosterRow();
+    const flags = computeAgentFlags(row, parseCertProgress("25"), ctx({ inLitmos: true }));
+    expect(flags.needsNestingBump).toBe(true);
+    expect(flags.isLikelyRehire).toBe(false);
+    expect(flags.needsNewCredentials).toBe(false);
+  });
+
+  it("Multiple signals + prior removal context populates rehireSignals", () => {
+    const ldata = {
+      courses: { "Anti-money Laundering Awareness 4.0 (US)": { completed: true, date: daysAgo(120), pct: 100 } },
+    };
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({
+      ldata,
+      removalAnnotation: { wasRemoved: true, lastRemovalReason: "Production Stale", lastRemovalDaysAgo: 30 },
+    }));
+    // Behavioral signal triggers; removed-list adds context
+    expect(flags.rehireSignals.length).toBeGreaterThanOrEqual(2);
+    expect(flags.rehireSignals.some(s => s.includes("120d ago"))).toBe(true);
+    expect(flags.rehireSignals.some(s => s.includes("Production Stale"))).toBe(true);
+  });
+
+  it("Nesting agent with rehire signals: not bumped (already there) and not flagged for new creds", () => {
+    // Rehire who's already in Nesting (the user's current 32 agents) — needsNestingBump
+    // and needsNewCredentials both require isRoster, so neither fires.
+    const ldata = {
+      courses: { "Anti-money Laundering Awareness 4.0 (US)": { completed: true, date: daysAgo(120), pct: 100 } },
+    };
+    const flags = computeAgentFlags({ ...rosterRow(), status: "Nesting - First Call" }, parseCertProgress("25"), rehireCtx({
+      ldata,
+    }));
+    expect(flags.isLikelyRehire).toBe(true); // diagnostic still set
+    expect(flags.needsNestingBump).toBe(false);
+    expect(flags.needsNewCredentials).toBe(false); // not in Roster
+  });
+
+  it("Name collision agent: still excluded from both bump and new-creds (preserves existing safety)", () => {
+    const ldata = {
+      courses: { "Anti-money Laundering Awareness 4.0 (US)": { completed: true, date: daysAgo(120), pct: 100 } },
+    };
+    const flags = computeAgentFlags(rosterRow(), parseCertProgress("25"), rehireCtx({
+      hasNameCollision: true,
+      ldata,
+    }));
+    expect(flags.needsNestingBump).toBe(false);
+    expect(flags.needsNewCredentials).toBe(false); // collision overrides
+  });
+});
+
 describe("computeAgentFlags — Needs Nav Outreach", () => {
   it("flags agent who completed all ShyftOff but missed Nav meeting", () => {
     const row = { status: "Nesting - First Call", certification_progress: "100" };

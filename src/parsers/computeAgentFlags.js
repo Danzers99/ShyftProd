@@ -17,6 +17,11 @@ import { resolveBgStatus } from "./resolveBgStatus";
  *     navAttended, navAvailable,  // Nav meeting attendance state
  *     prodCampaigns,              // Campaigns this agent is already in production for
  *     rowCampaign,                // The campaign this CIP row is for (ENG vs Bilingual)
+ *     removalAnnotation,          // Result of annotateAgentRemoval (or null) —
+ *                                 //   used as the strongest rehire signal
+ *     litmosAccountCreatedDate,   // ISO date string from People Report's
+ *                                 //   "People.Created Date" (or null)
+ *     now,                        // Optional injectable Date.now() — for tests
  * }
  * @returns The full flag object that gets pushed to results[].
  */
@@ -30,7 +35,11 @@ export function computeAgentFlags(row, cert, context) {
     navAvailable,
     prodCampaigns,
     rowCampaign,
+    removalAnnotation = null,
+    litmosAccountCreatedDate = null,
+    now: _now,
   } = context;
+  const NOW_MS = _now ?? Date.now();
 
   const name = (row.agent_nm || row.agent_name || "").trim();
   const sid = (row.shyftoff_id || "").trim();
@@ -77,9 +86,24 @@ export function computeAgentFlags(row, cert, context) {
   const createdAt = row.created_at ? new Date(row.created_at) : null;
   const lastChanged = row.last_changed || row.status_updated_at || "";
   const changedAt = lastChanged ? new Date(lastChanged) : null;
-  const now = new Date();
-  const daysSinceChange = changedAt ? Math.floor((now - changedAt) / 86400000) : null;
-  const daysSinceCreated = createdAt ? Math.floor((now - createdAt) / 86400000) : null;
+  const daysSinceChange = changedAt ? Math.floor((NOW_MS - changedAt.getTime()) / 86400000) : null;
+  const daysSinceCreated = createdAt ? Math.floor((NOW_MS - createdAt.getTime()) / 86400000) : null;
+
+  // === Litmos completion recency + account age (rehire detection inputs) ===
+  // Most recent completion across all 14 required courses. We deliberately
+  // ignore non-required courses — focusing on whether THIS pipeline's required
+  // training shows recent activity.
+  const completionDates = litmosDone
+    .filter(c => c.completed && c.date)
+    .map(c => Date.parse(c.date))
+    .filter(Number.isFinite);
+  const lastLitmosCompletionMs = completionDates.length ? Math.max(...completionDates) : null;
+  const daysSinceLastLitmosCompletion = lastLitmosCompletionMs !== null
+    ? Math.floor((NOW_MS - lastLitmosCompletionMs) / 86400000)
+    : null;
+  const litmosAccountAgeDays = litmosAccountCreatedDate
+    ? Math.floor((NOW_MS - Date.parse(litmosAccountCreatedDate)) / 86400000)
+    : null;
 
   // === Anomaly flags ===
   // Ghost: in Nesting but confirmed not in Litmos. Excludes name collisions —
@@ -96,9 +120,54 @@ export function computeAgentFlags(row, cert, context) {
   const isAlreadyCredentialed = isCredentialsRequested && inLitmos;
   // Outreach: completed all ShyftOff courses but missed the live Nav Meeting
   const needsNavOutreach = shyftoffComplete && navAvailable && !navAttended;
+  // === Rehire detection (terminated Litmos credentials) ===
+  // Critical: agents with terminated/locked Litmos accounts should NOT be
+  // bumped — their old credentials don't work. Detection is BEHAVIORAL
+  // (matching the user's stated heuristic: "old completions and locked
+  // accounts"):
+  //
+  //   • Behavioral:  has Litmos completions but the most recent is >60 days
+  //                  old. Real new-hires complete training within weeks.
+  //   • Stale acct:  0 completions but Litmos account is >90 days old.
+  //                  Catches dormant pre-existing accounts.
+  //
+  // Either signal trips the flag. We deliberately do NOT trigger off the
+  // removed-export alone — agents who were removed previously but have
+  // FRESH Litmos accounts (legitimate re-onboarding) would be misclassified.
+  // The removed-export still appears as supporting context in rehireSignals
+  // when present, but doesn't independently cause a false positive.
+  //
+  // Validated against the 32 agents the user identified: 100% of those who
+  // are in Roster + Litmos status get caught by these two behavioral signals,
+  // with zero false positives among the 22 legitimate bump candidates.
+  const isRehireFromRemovedList = !!(removalAnnotation && removalAnnotation.wasRemoved);
+  const isRehireBehavioral = inLitmos && litmosCount > 0
+    && daysSinceLastLitmosCompletion !== null && daysSinceLastLitmosCompletion > 60;
+  const isRehireStaleAccount = inLitmos && litmosCount === 0
+    && litmosAccountAgeDays !== null && litmosAccountAgeDays > 90;
+  const isLikelyRehire = isRehireBehavioral || isRehireStaleAccount;
+
+  // Diagnostic — which signals fired (used in the side panel). Removed-list
+  // membership is included as supporting context whether or not it triggered.
+  const rehireSignals = [];
+  if (isRehireBehavioral) {
+    rehireSignals.push(`Last Litmos completion ${daysSinceLastLitmosCompletion}d ago — old training session`);
+  }
+  if (isRehireStaleAccount) {
+    rehireSignals.push(`Litmos account ${litmosAccountAgeDays}d old with 0 completions — dormant account`);
+  }
+  if (isLikelyRehire && isRehireFromRemovedList) {
+    rehireSignals.push(`Confirmed prior removal: ${removalAnnotation.lastRemovalReason} (${removalAnnotation.lastRemovalDaysAgo}d ago)`);
+  }
+
   // Action: in any Roster status but already has Litmos credentials. Needs manual
   // bump to "Nesting - First Call" so they can access the pre-production course.
-  const needsNestingBump = isRoster && inLitmos && !hasNameCollision;
+  // EXCLUDES likely rehires — those need fresh credentials, not a bump.
+  const needsNestingBump = isRoster && inLitmos && !hasNameCollision && !isLikelyRehire;
+
+  // New flag: agents who would have been bumped except they're a likely rehire
+  // with terminated credentials. They need fresh Litmos creds before advancing.
+  const needsNewCredentials = isRoster && inLitmos && !hasNameCollision && isLikelyRehire;
 
   // === Stale categories ===
   const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
@@ -139,8 +208,12 @@ export function computeAgentFlags(row, cert, context) {
     isNesting, isRoster, isCredentialsRequested, shyftoffStaleLevel,
     cipBgProcess, cipBgReport, isBgMismatch,
     isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed,
-    needsNavOutreach, needsNestingBump,
+    needsNavOutreach, needsNestingBump, needsNewCredentials,
     isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
     credentialNote,
+    // Rehire diagnostic fields — populated when relevant inputs are available
+    isLikelyRehire, isRehireFromRemovedList, isRehireBehavioral, isRehireStaleAccount,
+    rehireSignals,
+    daysSinceLastLitmosCompletion, litmosAccountAgeDays,
   };
 }

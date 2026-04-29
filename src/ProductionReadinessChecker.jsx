@@ -276,11 +276,16 @@ export default function ProductionReadinessChecker() {
     const litmosPeopleEmails = new Set();
     const litmosPeopleNames = new Set();
     const litmosNameToUsernames = new Map(); // nameKey → [usernames, ...] for collision detection
+    // Account creation dates by name-key — used for the rehire stale-account
+    // signal. People Report's "People.Created Date" is the only place this
+    // info is available (Litmos Course Data doesn't include it).
+    const litmosAccountCreatedByKey = new Map();
     (peopleData || []).forEach(r => {
       const email = (r["People.Username"] || "").toLowerCase().trim();
       if (email) litmosPeopleEmails.add(email);
       const first = r["People.First Name"] || "";
       const last = r["People.Last Name"] || "";
+      const createdDate = (r["People.Created Date"] || "").trim();
       if (first || last) {
         // Register both the raw name key AND all variations
         // (handles "Candace Monger I" where middle initial is stored in last name field)
@@ -289,6 +294,9 @@ export default function ProductionReadinessChecker() {
         variations.forEach(k => {
           litmosPeopleNames.add(k);
           if (!litmosNameToUsernames.has(k)) litmosNameToUsernames.set(k, []);
+          if (createdDate && !litmosAccountCreatedByKey.has(k)) {
+            litmosAccountCreatedByKey.set(k, createdDate);
+          }
           if (email && !litmosNameToUsernames.get(k).includes(email)) {
             litmosNameToUsernames.get(k).push(email);
           }
@@ -491,10 +499,59 @@ export default function ProductionReadinessChecker() {
       // Outreach target: completed all ShyftOff courses but didn't attend the live Nav Meeting.
       // Reach out to encourage attendance — the only thing blocking their readiness.
       const needsNavOutreach = shyftoffComplete && (navData && navData.length > 0) && !navAttended;
+      // === Rehire detection (terminated Litmos credentials) ===
+      // Some Roster + Litmos agents have OLD locked accounts and shouldn't be
+      // bumped — they need fresh credentials. Two BEHAVIORAL signals identify
+      // them (matching the user's stated heuristic of old completions/dormant
+      // accounts):
+      //   • Behavioral: had Litmos completions but most recent is >60 days old
+      //   • Stale acct: 0 completions but Litmos account is >90 days old
+      // The removed-export shows up as supporting context but does NOT trigger
+      // alone (would mis-flag legitimately re-onboarded agents).
+      // Logic mirrors src/parsers/computeAgentFlags.js (covered by 11 tests).
+      const completionDates = litmosDone
+        .filter(c => c.completed && c.date)
+        .map(c => Date.parse(c.date))
+        .filter(Number.isFinite);
+      const lastLitmosCompletionMs = completionDates.length ? Math.max(...completionDates) : null;
+      const daysSinceLastLitmosCompletion = lastLitmosCompletionMs !== null
+        ? Math.floor((Date.now() - lastLitmosCompletionMs) / 86400000)
+        : null;
+      const litmosAccountCreatedDate = (() => {
+        for (const k of nameKeyVariations(name)) {
+          if (litmosAccountCreatedByKey.has(k)) return litmosAccountCreatedByKey.get(k);
+        }
+        return null;
+      })();
+      const litmosAccountAgeDays = litmosAccountCreatedDate
+        ? Math.floor((Date.now() - Date.parse(litmosAccountCreatedDate)) / 86400000)
+        : null;
+      const removalAnnotationLocal = removalMap ? annotateAgentRemoval(removalMap, sid) : null;
+      const isRehireFromRemovedList = !!(removalAnnotationLocal && removalAnnotationLocal.wasRemoved);
+      const isRehireBehavioral = inLitmos && litmosCount > 0
+        && daysSinceLastLitmosCompletion !== null && daysSinceLastLitmosCompletion > 60;
+      const isRehireStaleAccount = inLitmos && litmosCount === 0
+        && litmosAccountAgeDays !== null && litmosAccountAgeDays > 90;
+      const isLikelyRehire = isRehireBehavioral || isRehireStaleAccount;
+      const rehireSignals = [];
+      if (isRehireBehavioral) {
+        rehireSignals.push(`Last Litmos completion ${daysSinceLastLitmosCompletion}d ago — old training session`);
+      }
+      if (isRehireStaleAccount) {
+        rehireSignals.push(`Litmos account ${litmosAccountAgeDays}d old with 0 completions — dormant account`);
+      }
+      if (isLikelyRehire && isRehireFromRemovedList) {
+        rehireSignals.push(`Confirmed prior removal: ${removalAnnotationLocal.lastRemovalReason} (${removalAnnotationLocal.lastRemovalDaysAgo}d ago)`);
+      }
+
       // Action target: agent is in any Roster status but ALREADY has Litmos credentials.
       // They need to be manually bumped to "Nesting - First Call" so they can access the
       // pre-production course (which is only visible in Nesting).
-      const needsNestingBump = isRoster && inLitmos && !hasNameCollision;
+      // EXCLUDES likely rehires — those need fresh credentials, not a bump.
+      const needsNestingBump = isRoster && inLitmos && !hasNameCollision && !isLikelyRehire;
+      // New flag: rehire-with-terminated-creds in Roster status. They need fresh
+      // credentials issued before they can advance.
+      const needsNewCredentials = isRoster && inLitmos && !hasNameCollision && isLikelyRehire;
 
       const isStaleWaiter = isWaitingForCreds && daysSinceChange !== null && daysSinceChange >= 21;
       // Split stale into: in credentials queue vs truly stale (only agents with cleared BG)
@@ -540,9 +597,15 @@ export default function ProductionReadinessChecker() {
         lastChangedRaw: lastChanged,
         isNesting, isRoster, isCredentialsRequested, shyftoffStaleLevel,
         cipBgProcess, cipBgReport, isBgMismatch,
-        isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed, needsNavOutreach, needsNestingBump,
+        isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed,
+        needsNavOutreach, needsNestingBump, needsNewCredentials,
         isStaleWaiter, isStaleInQueue, isTrulyStale, hasAccountIssue,
         credentialNote,
+        // Rehire diagnostic — populated whether or not signals fired so the
+        // side panel can show "no rehire signals detected" for legit bumps.
+        isLikelyRehire, isRehireFromRemovedList, isRehireBehavioral, isRehireStaleAccount,
+        rehireSignals,
+        daysSinceLastLitmosCompletion, litmosAccountAgeDays, litmosAccountCreatedDate,
         ...(removal || {}),
       });
     });
@@ -697,6 +760,7 @@ export default function ProductionReadinessChecker() {
     if (filter === "name_collision") out = out.filter(a => a.hasNameCollision);
     if (filter === "needs_nav") out = out.filter(a => a.needsNavOutreach);
     if (filter === "needs_bump") out = out.filter(a => a.needsNestingBump);
+    if (filter === "needs_new_creds") out = out.filter(a => a.needsNewCredentials);
     if (filter === "campaign_eng") out = out.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign));
     if (filter === "campaign_bi") out = out.filter(a => a.rowCampaign && /bilingual/i.test(a.rowCampaign));
     if (filter === "campaign_both") out = out.filter(a => a.rowCampaign && /nations/i.test(a.rowCampaign) && a.prodCampaigns && a.prodCampaigns.length > 0);
@@ -734,6 +798,7 @@ export default function ProductionReadinessChecker() {
       nameCollisions: results.filter(a => a.hasNameCollision).length,
       needsNavOutreach: results.filter(a => a.needsNavOutreach).length,
       needsNestingBump: results.filter(a => a.needsNestingBump).length,
+      needsNewCredentials: results.filter(a => a.needsNewCredentials).length,
       flBlueDone: results.filter(a => a.flBlueDone).length,
       flBlueIncomplete: results.filter(a => !a.flBlueDone).length,
       engPipeline: results.filter(a => a.rowCampaign && !/bilingual/i.test(a.rowCampaign) && /nations/i.test(a.rowCampaign)).length,
@@ -789,7 +854,7 @@ export default function ProductionReadinessChecker() {
 
   const handleExportIssues = () => {
     if (!results) return;
-    const issueAgents = results.filter(a => a.isBgMismatch || a.hasAccountIssue || a.isGhost || a.isTrulyStale || a.isStaleInQueue || a.hasNameCollision || a.needsNestingBump);
+    const issueAgents = results.filter(a => a.isBgMismatch || a.hasAccountIssue || a.isGhost || a.isTrulyStale || a.isStaleInQueue || a.hasNameCollision || a.needsNestingBump || a.needsNewCredentials);
     if (!issueAgents.length) return;
     const today = new Date().toISOString().split("T")[0];
     const headers = [
@@ -812,6 +877,7 @@ export default function ProductionReadinessChecker() {
     ];
     issueAgents.forEach(a => {
       if (a.needsNestingBump) rows.push(["Needs Nesting Bump", ...baseFields(a), "Agent is in a Roster status but already has Litmos credentials. Move to 'Nesting - First Call' so they can access the pre-production course."]);
+      if (a.needsNewCredentials) rows.push(["Rehire — Needs New Credentials", ...baseFields(a), `Rehire with terminated/locked Litmos account — do NOT bump. Issue fresh credentials. Signals: ${(a.rehireSignals || []).join(" · ")}`]);
       if (a.isBgMismatch) rows.push(["BG Data Mismatch", ...baseFields(a), "Roster shows cleared but CIP shows In Progress. Investigate BG check system sync."]);
       if (a.hasAccountIssue) rows.push(["BG Pending/Created", ...baseFields(a), "Background check not cleared. Agent blocked from progressing."]);
       if (a.isGhost) rows.push(["Nesting Without Credentials", ...baseFields(a), "In Nesting status but no Litmos account. Needs credentialing or status correction."]);
@@ -878,6 +944,50 @@ export default function ProductionReadinessChecker() {
 
     downloadCsv(headers, rows, `needs_nesting_bump_by_campaign_${today}.csv`);
     toast.success(`Exported ${rows.length.toLocaleString()} agents needing Nesting bump`);
+  };
+
+  // Ops export specifically for rehires-needing-fresh-credentials. Same shape
+  // as the bump export but with rehire diagnostic columns so ops can see why
+  // the agent was flagged (prior removal? old completion? dormant account?).
+  const handleExportNewCreds = () => {
+    if (!results) return;
+    const rehireAgents = results.filter(a => a.needsNewCredentials);
+    if (!rehireAgents.length) return;
+    const today = new Date().toISOString().split("T")[0];
+    const headers = [
+      "Campaign", "Agent Name", "ShyftOff ID", "Current Status",
+      "Litmos Count", "Last Litmos Completion (days ago)", "Litmos Account Age (days)",
+      "Prior Removal Reason", "Prior Removal Date", "Detection Signals", "Action",
+    ];
+    const labelCampaign = (a) => {
+      const c = (a.rowCampaign || "").toLowerCase();
+      const hasEng = c && c.includes("nations") && !c.includes("bilingual");
+      const hasBi = c && c.includes("bilingual");
+      if (hasBi) return "Bilingual";
+      if (hasEng) return "ENG";
+      return "Unknown";
+    };
+    const rows = rehireAgents.map(a => [
+      labelCampaign(a),
+      a.name,
+      a.sid,
+      a.status,
+      `${a.litmosCount}/14`,
+      a.daysSinceLastLitmosCompletion !== null ? a.daysSinceLastLitmosCompletion : "(never)",
+      a.litmosAccountAgeDays !== null ? a.litmosAccountAgeDays : "(unknown)",
+      a.lastRemovalReason || "(not in removed-export)",
+      a.lastRemovalDate || "(N/A)",
+      (a.rehireSignals || []).join(" · "),
+      "Issue NEW Litmos credentials — do not bump to Nesting",
+    ]);
+    const order = { "ENG": 0, "Bilingual": 1, "Unknown": 2 };
+    rows.sort((x, y) => {
+      const co = (order[x[0]] ?? 99) - (order[y[0]] ?? 99);
+      if (co !== 0) return co;
+      return x[1].toLowerCase().localeCompare(y[1].toLowerCase());
+    });
+    downloadCsv(headers, rows, `rehires_needing_new_credentials_${today}.csv`);
+    toast.success(`Exported ${rows.length.toLocaleString()} rehires needing fresh credentials`);
   };
 
   const emailBody = useMemo(() => {
@@ -1146,21 +1256,37 @@ export default function ProductionReadinessChecker() {
                 <div className="text-xs flex gap-3" style={{ color: "#5c3d7a" }}>
                   <span style={{ color: stats.needsNestingBump > 0 ? "#FF66C4" : "#5c3d7a" }}>{stats.needsNestingBump} need Nesting bump</span>
                   <span>•</span>
+                  <span style={{ color: stats.needsNewCredentials > 0 ? "#FF7866" : "#5c3d7a" }}>{stats.needsNewCredentials} rehires need creds</span>
+                  <span>•</span>
                   <span style={{ color: stats.needsNavOutreach > 0 ? "#FFE566" : "#5c3d7a" }}>{stats.needsNavOutreach} need Nav</span>
                 </div>
               </button>
               {openSections.has("outreach") && (
-                <div className="px-4 py-3 grid grid-cols-2 gap-2" style={{ background: "#27133A" }}>
+                <div className="px-4 py-3 grid grid-cols-3 gap-2" style={{ background: "#27133A" }}>
                   <div className="rounded-lg p-3" style={{ background: filter === "needs_bump" ? "#FF66C422" : "#FF66C411", border: `1px solid ${filter === "needs_bump" ? "#FF66C4" : "#794EC2"}` }}>
                     <button onClick={() => setFilter(filter === "needs_bump" ? "all" : "needs_bump")} className="w-full text-left transition-all hover:brightness-110">
                       <div className="flex items-center justify-between mb-0.5">
                         <span className="text-sm font-bold" style={{ color: "#FF66C4" }}>Needs Nesting Bump</span>
                         <span className="text-2xl font-black" style={{ color: "#FF66C4" }}>{stats.needsNestingBump}</span>
                       </div>
-                      <div className="text-xs" style={{ color: "#b8a5d4" }}>In a Roster status but already has Litmos credentials. Manually move to "Nesting - First Call" so they can access pre-production.</div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>In Roster + has fresh Litmos credentials. Move to "Nesting - First Call" so they can access pre-production. Rehires with old/locked accounts are excluded — see next card.</div>
                     </button>
                     {stats.needsNestingBump > 0 && (
                       <button onClick={(e) => { e.stopPropagation(); handleExportNestingBump(); }} className="mt-2 px-2 py-1 rounded text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#FF66C4", color: "#27133A" }}>
+                        ↓ Export for Ops (CSV)
+                      </button>
+                    )}
+                  </div>
+                  <div className="rounded-lg p-3" style={{ background: filter === "needs_new_creds" ? "#FF786633" : "#FF786611", border: `1px solid ${filter === "needs_new_creds" ? "#FF7866" : "#4D1F3B"}` }}>
+                    <button onClick={() => setFilter(filter === "needs_new_creds" ? "all" : "needs_new_creds")} className="w-full text-left transition-all hover:brightness-110">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-sm font-bold flex items-center gap-1" style={{ color: "#FF7866" }}>↻ Rehire — Needs New Credentials</span>
+                        <span className="text-2xl font-black" style={{ color: "#FF7866" }}>{stats.needsNewCredentials}</span>
+                      </div>
+                      <div className="text-xs" style={{ color: "#b8a5d4" }}>In Roster with an OLD Litmos account (terminated/locked). Issue fresh credentials before they can advance — do NOT bump to Nesting.</div>
+                    </button>
+                    {stats.needsNewCredentials > 0 && (
+                      <button onClick={(e) => { e.stopPropagation(); handleExportNewCreds(); }} className="mt-2 px-2 py-1 rounded text-xs font-semibold transition-all hover:brightness-110" style={{ background: "#FF7866", color: "#27133A" }}>
                         ↓ Export for Ops (CSV)
                       </button>
                     )}
@@ -1397,6 +1523,15 @@ export default function ProductionReadinessChecker() {
             {a.isWaitingForCreds && !a.isStaleWaiter && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#2d1a4e", color: "#E8DFF6", fontSize: 10 }}>AWAITING CREDS</span>}
             {a.hasNameCollision && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#3d2057", color: "#FF66C4", fontSize: 10 }}>⚠ NAME COLLISION</span>}
             {a.needsNestingBump && <span className="text-xs px-1.5 py-0 rounded" style={{ background: "#794EC2", color: "#FF66C4", fontSize: 10 }}>NEEDS NESTING BUMP</span>}
+            {a.needsNewCredentials && (
+              <span
+                className="text-xs px-1.5 py-0 rounded"
+                style={{ background: "#3d1525", color: "#FF7866", fontSize: 10 }}
+                title={`Rehire — terminated Litmos account. Signals: ${(a.rehireSignals || []).join(" · ")}`}
+              >
+                ↻ REHIRE — NEEDS CREDS
+              </span>
+            )}
             {a.wasRemoved && (
               <span
                 className="text-xs px-1.5 py-0 rounded"
@@ -1540,6 +1675,29 @@ export default function ProductionReadinessChecker() {
                 </div>
                 )}
               </div>
+
+              {/* Rehire — Needs New Credentials diagnostic */}
+              {ag.needsNewCredentials && (
+                <div className="px-4 py-3" style={{ borderBottom: "1px solid #3d2057", background: "#3d152511" }}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#FF7866" }}>
+                      ↻ Rehire — Needs New Credentials
+                    </div>
+                  </div>
+                  <div className="text-xs mb-2" style={{ color: "#b8a5d4" }}>
+                    Detected as a likely rehire with old/locked Litmos account.
+                    Issue fresh credentials before bumping to Nesting.
+                  </div>
+                  <ul className="space-y-1 text-xs" style={{ color: "#FFE566" }}>
+                    {(ag.rehireSignals || []).map((sig, i) => (
+                      <li key={i} style={{ paddingLeft: 12, position: "relative" }}>
+                        <span style={{ position: "absolute", left: 0, color: "#FF7866" }}>•</span>
+                        {sig}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* Removal History — only when removed file uploaded and this agent has history */}
               {ag.wasRemoved && ag.removalHistory && (
