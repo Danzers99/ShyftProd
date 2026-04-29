@@ -469,8 +469,14 @@ export default function ProductionReadinessChecker() {
       const lastChanged = row.last_changed || row.status_updated_at || "";
       const changedAt = lastChanged ? new Date(lastChanged) : null;
       const statusLower = status.toLowerCase();
-      const isNesting = statusLower.includes("nesting");
-      const isRoster = statusLower.includes("roster");
+      // "Roster - Phase 2 Training" is functionally the same stage as
+      // "Nesting - First Call" — agents have already moved into the nesting
+      // phase even though their CIP status still has "Roster" in the name.
+      // Treat it as Nesting for all downstream flag logic, NOT as Roster, so
+      // these agents are correctly excluded from bump/rehire detection.
+      const isPhase2Training = statusLower.includes("phase 2 training");
+      const isNesting = statusLower.includes("nesting") || isPhase2Training;
+      const isRoster = statusLower.includes("roster") && !isPhase2Training;
       const isCredentialsRequested = statusLower.includes("credentials requested");
       const shyftoffStaleLevel = (row.stale_level || "").trim();
 
@@ -595,7 +601,7 @@ export default function ProductionReadinessChecker() {
         daysSinceChange, daysSinceCreated,
         createdAtRaw: row.created_at || "",
         lastChangedRaw: lastChanged,
-        isNesting, isRoster, isCredentialsRequested, shyftoffStaleLevel,
+        isNesting, isRoster, isPhase2Training, isCredentialsRequested, shyftoffStaleLevel,
         cipBgProcess, cipBgReport, isBgMismatch,
         isGhost, isWaitingForCreds, isCredsRequestedNoCourses, isAlreadyCredentialed,
         needsNavOutreach, needsNestingBump, needsNewCredentials,

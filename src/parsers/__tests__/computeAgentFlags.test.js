@@ -77,6 +77,85 @@ describe("computeAgentFlags — Needs Nesting Bump (98 stuck agents regression)"
   });
 });
 
+describe("computeAgentFlags — Phase 2 Training equivalence (Roster - Phase 2 Training = Nesting)", () => {
+  it("Roster - Phase 2 Training is NOT flagged as needsNestingBump (already in nesting phase)", () => {
+    // Three agents currently in this status as of 2026-04-29: Kyra Bonds,
+    // Naike Gabriel, Steve Melliz. They were being incorrectly flagged for
+    // a Nesting bump even though they're already in the training phase.
+    const row = { status: "Roster - Phase 2 Training", certification_progress: "25" };
+    const flags = computeAgentFlags(row, parseCertProgress("25"), ctx({ inLitmos: true }));
+    expect(flags.needsNestingBump).toBe(false);
+    expect(flags.isPhase2Training).toBe(true);
+    expect(flags.isRoster).toBe(false);  // refined to exclude Phase 2
+    expect(flags.isNesting).toBe(true);  // expanded to include Phase 2
+  });
+
+  it("Phase 2 Training rehire does NOT get needsNewCredentials flag (already in nesting)", () => {
+    // Even if a Phase 2 Training agent has all the rehire signals, the
+    // needsNewCredentials flag requires isRoster=true, so it doesn't fire.
+    // This is correct: they're past the Roster gate already.
+    const NOW = Date.parse("2026-04-29T12:00:00Z");
+    const ldata = {
+      courses: { "Anti-money Laundering Awareness 4.0 (US)": { completed: true, date: new Date(NOW - 120 * 86400000).toISOString(), pct: 100 } },
+    };
+    const row = { status: "Roster - Phase 2 Training", certification_progress: "25" };
+    const flags = computeAgentFlags(row, parseCertProgress("25"), ctx({ inLitmos: true, ldata, now: NOW }));
+    expect(flags.isLikelyRehire).toBe(true);  // diagnostic still set
+    expect(flags.needsNestingBump).toBe(false);
+    expect(flags.needsNewCredentials).toBe(false); // Phase 2 disqualifies
+  });
+
+  it("Phase 2 Training agent without Litmos IS flagged as a ghost (Nesting equivalence applies)", () => {
+    // The other side of the equivalence: ghost detection (Nesting + no creds)
+    // should fire for Phase 2 Training agents who lack credentials.
+    const row = { status: "Roster - Phase 2 Training", certification_progress: "25" };
+    const flags = computeAgentFlags(row, parseCertProgress("25"), ctx({ inLitmos: false }));
+    expect(flags.isGhost).toBe(true);
+    expect(flags.isNesting).toBe(true);
+  });
+
+  it("Regression: 'Roster - Credentials Requested' still triggers needsNestingBump", () => {
+    const row = { status: "Roster - Credentials Requested", certification_progress: "25" };
+    const flags = computeAgentFlags(row, parseCertProgress("25"), ctx({ inLitmos: true }));
+    expect(flags.needsNestingBump).toBe(true);
+    expect(flags.isPhase2Training).toBe(false);
+    expect(flags.isRoster).toBe(true);
+    expect(flags.isNesting).toBe(false);
+  });
+
+  it("Regression: 'Roster - Certification In-Progress' still treated as Roster", () => {
+    const row = { status: "Roster - Certification In-Progress", certification_progress: "25" };
+    const flags = computeAgentFlags(row, parseCertProgress("25"), ctx({ inLitmos: true }));
+    expect(flags.isRoster).toBe(true);
+    expect(flags.isPhase2Training).toBe(false);
+  });
+
+  it("Regression: 'Pre-Roster - Phase 1 Training' is NOT mistakenly treated as Phase 2", () => {
+    // Phase 1 must remain in its existing classification — only Phase 2 gets
+    // the Nesting equivalence treatment.
+    const row = { status: "Pre-Roster - Phase 1 Training", certification_progress: "0" };
+    const flags = computeAgentFlags(row, parseCertProgress("0"), ctx({ inLitmos: false }));
+    expect(flags.isPhase2Training).toBe(false);
+    expect(flags.isNesting).toBe(false);
+  });
+
+  it("Regression: 'Nesting - First Call' itself unchanged", () => {
+    const row = { status: "Nesting - First Call", certification_progress: "100" };
+    const flags = computeAgentFlags(row, parseCertProgress("100"), ctx({ inLitmos: true }));
+    expect(flags.isNesting).toBe(true);
+    expect(flags.isRoster).toBe(false);
+    expect(flags.isPhase2Training).toBe(false);
+    expect(flags.needsNestingBump).toBe(false);
+  });
+
+  it("Case-insensitive: 'roster - phase 2 training' (lowercase) still detected", () => {
+    const row = { status: "roster - phase 2 training", certification_progress: "25" };
+    const flags = computeAgentFlags(row, parseCertProgress("25"), ctx({ inLitmos: true }));
+    expect(flags.isPhase2Training).toBe(true);
+    expect(flags.needsNestingBump).toBe(false);
+  });
+});
+
 describe("computeAgentFlags — Rehire detection (terminated Litmos credentials)", () => {
   // Fixed reference time so dates compute deterministically.
   const NOW = Date.parse("2026-04-29T12:00:00Z");
