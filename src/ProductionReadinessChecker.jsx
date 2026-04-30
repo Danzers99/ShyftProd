@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useEffect, useDeferredValue, useRef } f
 import { useToast } from "./components/Toast";
 import { saveSnapshot, saveHistoryEntry, loadSnapshot, clearSnapshot, isStale, formatLoadedTime, loadHistory, clearAllHistory } from "./utils/storage";
 import { computeDailyDiff, buildAgentDigest, DIFF_CATEGORIES } from "./utils/dailyDiff";
+import { pushSnapshotToSulto, isSultoConfigured } from "./sulto";
 import { readUrlState, writeUrlState } from "./utils/urlState";
 import { identifyFile, validateSlot } from "./utils/schemaValidation";
 import { REQUIRED_LITMOS, SHORT_LITMOS, ROSTER_COURSES, NESTING_COURSES, FL_BLUE_LEGACY, SHYFTOFF_COURSES } from "./utils/constants";
@@ -249,6 +250,10 @@ export default function ProductionReadinessChecker() {
       setFileMeta(meta);
       const totalRows = litRows.length + cipRows.length + prodRows.length + navRows.length + pplRows.length + rmvRows.length;
       toast.success(`Analyzed ${totalRows.toLocaleString()} rows · saved to cache`);
+      // Trigger the Sulto push on the NEXT render, after the results /
+      // prodAgents useMemos have recomputed against the new raw data.
+      // No-op if env vars aren't configured.
+      setPendingSultoPush(true);
     } catch (e) {
       console.error("handleProcess failed:", e);
       toast.error(`Analysis failed: ${e.message}`);
@@ -736,6 +741,23 @@ export default function ProductionReadinessChecker() {
       .catch(e => console.error("History write failed:", e));
   }, [results, prodAgents, savedAt]);
 
+  // Fire-and-forget push to the Sulto receiver after a fresh Analyze.
+  // Driven by an explicit pendingSultoPush state — set by handleProcess only
+  // after a successful run, NOT by the IndexedDB snapshot restore effect.
+  // This ensures a page refresh doesn't re-push the same snapshot.
+  const [pendingSultoPush, setPendingSultoPush] = useState(false);
+  useEffect(() => {
+    if (!pendingSultoPush || !results) return;
+    setPendingSultoPush(false);
+    pushSnapshotToSulto(results, prodAgents).then(status => {
+      if (status === "ok") toast.success("Snapshot pushed to Sulto");
+      else if (status === "error") toast.warn("Sulto push failed — see console");
+      // status === "no-config" is silent (local dev / preview without env vars)
+    });
+    // toast is stable from context; intentionally omitted to keep deps tight
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSultoPush, results, prodAgents]);
+
   const filtered = useMemo(() => {
     if (!results) return [];
     // Production filters return prod agents instead of pipeline agents
@@ -1152,6 +1174,16 @@ export default function ProductionReadinessChecker() {
             style={{ background: "var(--c-primary)", color: "var(--c-bg-page)" }}>
             {processing ? "Processing…" : "Analyze Readiness"}
           </button>
+          {/* Sulto integration indicator — only shown when env vars are configured */}
+          {isSultoConfigured() && (
+            <span
+              className="text-xs px-2 py-0.5 rounded inline-flex items-center gap-1"
+              style={{ background: "var(--c-bg-panel)", color: "var(--c-text-dim)", border: "1px solid var(--c-border)" }}
+              title="Snapshots are pushed to the Sulto receiver after each Analyze"
+            >
+              → Sulto
+            </span>
+          )}
           {/* Inline validation hint — surfaces missing required files when Analyze is disabled */}
           {!hasData && !processing && (!litmosFiles.length || !cipFiles.length || !peopleFiles.length) && (
             <span className="text-xs" style={{ color: "var(--c-yellow)" }}>
