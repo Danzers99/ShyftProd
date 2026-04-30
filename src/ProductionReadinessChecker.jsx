@@ -1,8 +1,22 @@
 import { useState, useMemo, useCallback, useEffect, useDeferredValue, useRef } from "react";
 import { useToast } from "./components/Toast";
-import { saveSnapshot, saveHistoryEntry, loadSnapshot, clearSnapshot, isStale, formatLoadedTime, loadHistory, clearAllHistory } from "./utils/storage";
+import { saveSnapshot, saveHistoryEntry, loadSnapshot, clearSnapshot, isStale, formatLoadedTime, loadHistory, clearAllHistory, dumpAllStorage, restoreFromBackup } from "./utils/storage";
 import { computeDailyDiff, buildAgentDigest, DIFF_CATEGORIES } from "./utils/dailyDiff";
 import { pushSnapshotToSulto, isSultoConfigured } from "./sulto";
+import {
+  pushHistoryToCloud,
+  pullCloudHistoryToLocal,
+  pushAllLocalHistoryToCloud,
+  isCloudSyncConfigured,
+} from "./cloudSync";
+import {
+  requestPersistentStorage,
+  isStoragePersistent,
+  buildBackupPayload,
+  validateBackupPayload,
+  downloadJson,
+  readJsonFile,
+} from "./utils/storageExtras";
 import { readUrlState, writeUrlState } from "./utils/urlState";
 import { identifyFile, validateSlot } from "./utils/schemaValidation";
 import { REQUIRED_LITMOS, SHORT_LITMOS, ROSTER_COURSES, NESTING_COURSES, FL_BLUE_LEGACY, SHYFTOFF_COURSES } from "./utils/constants";
@@ -157,6 +171,100 @@ export default function ProductionReadinessChecker() {
     loadHistory().then(setHistory).catch(() => setHistory([]));
   }, [savedAt]); // refresh when a new snapshot is saved
 
+  // Storage persistence — request once on mount, expose state for the cache
+  // bar's health badge.
+  const [storagePersistent, setStoragePersistent] = useState(false);
+  useEffect(() => {
+    isStoragePersistent().then(setStoragePersistent);
+  }, []);
+
+  // First-mount cloud bootstrap: if local IDB has fewer than 2 days of
+  // history (so daily-diff can't render) AND cloud sync is configured AND
+  // cloud has data, pull it down. This is the cross-device recovery path —
+  // open the tool on a fresh machine, get your history back automatically.
+  const cloudBootstrapRef = useRef(false);
+  useEffect(() => {
+    if (cloudBootstrapRef.current) return;
+    if (!isCloudSyncConfigured()) return;
+    if (history.length >= 2) return; // already have enough local history
+    cloudBootstrapRef.current = true;
+    pullCloudHistoryToLocal(history, saveHistoryEntry).then(({ pulled }) => {
+      if (pulled > 0) {
+        loadHistory().then(setHistory);
+        toast.info(`Restored ${pulled} day${pulled === 1 ? "" : "s"} of history from cloud`);
+      }
+    }).catch(e => console.warn("Cloud bootstrap failed:", e));
+    // toast is stable; eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history]);
+
+  // Manual sync handlers — exposed via the Cloud / Backup actions in the cache bar.
+  const handleSyncFromCloud = useCallback(async () => {
+    if (!isCloudSyncConfigured()) {
+      toast.warn("Cloud sync not configured (missing VITE_SHYFTPROD_API_TOKEN)");
+      return;
+    }
+    const local = await loadHistory();
+    const { pulled, alreadyHave, failed } = await pullCloudHistoryToLocal(local, saveHistoryEntry);
+    if (pulled > 0) {
+      const fresh = await loadHistory();
+      setHistory(fresh);
+      toast.success(`Synced ${pulled} new day${pulled === 1 ? "" : "s"} from cloud · ${alreadyHave} already local${failed ? ` · ${failed} failed` : ""}`);
+    } else if (failed > 0) {
+      toast.error(`Sync failed (${failed} errors) — see console`);
+    } else {
+      toast.info(`Already in sync · ${alreadyHave} day${alreadyHave === 1 ? "" : "s"} local`);
+    }
+  }, [toast]);
+
+  const handlePushAllToCloud = useCallback(async () => {
+    if (!isCloudSyncConfigured()) {
+      toast.warn("Cloud sync not configured");
+      return;
+    }
+    const local = await loadHistory();
+    const { pushed, skipped } = await pushAllLocalHistoryToCloud(local);
+    if (pushed > 0) toast.success(`Pushed ${pushed} day${pushed === 1 ? "" : "s"} to cloud · ${skipped} already synced`);
+    else toast.info(`Cloud already up to date · ${skipped} day${skipped === 1 ? "" : "s"} synced`);
+  }, [toast]);
+
+  const handleExportBackup = useCallback(async () => {
+    const dump = await dumpAllStorage();
+    const payload = buildBackupPayload(dump.current, dump.history);
+    const filename = downloadJson(payload, "shyftprod-backup");
+    toast.success(`Exported ${dump.history.length} day${dump.history.length === 1 ? "" : "s"} of history → ${filename}`);
+  }, [toast]);
+
+  const importInputRef = useRef(null);
+  const handleImportBackupClick = () => importInputRef.current?.click();
+  const handleImportBackupFile = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+    const { ok, payload, reason } = await readJsonFile(file);
+    if (!ok) { toast.error(reason); return; }
+    const v = validateBackupPayload(payload);
+    if (!v.ok) { toast.error(`Invalid backup: ${v.reason}`); return; }
+    if (!confirm(`Restore ${payload.history?.length || 0} day${payload.history?.length === 1 ? "" : "s"} of history?\n\nMerge mode: only adds dates not already present locally.`)) return;
+    const { restoredHistory, replacedCurrent } = await restoreFromBackup(payload, "merge");
+    const fresh = await loadHistory();
+    setHistory(fresh);
+    if (replacedCurrent) {
+      // Reload current snapshot from IDB
+      const snap = await loadSnapshot();
+      if (snap) {
+        setLitmosData(snap.parsedData?.litmosData || null);
+        setCipData(snap.parsedData?.cipData || null);
+        setProdData(snap.parsedData?.prodData || null);
+        setNavData(snap.parsedData?.navData || null);
+        setPeopleData(snap.parsedData?.peopleData || null);
+        setRemovedData(snap.parsedData?.removedData || null);
+        setSavedAt(snap.savedAt);
+        setFileMeta(snap.fileMeta || null);
+      }
+    }
+    toast.success(`Restored ${restoredHistory} day${restoredHistory === 1 ? "" : "s"} of history${replacedCurrent ? " + current snapshot" : ""}`);
+  }, [toast]);
+
   // Compute the rich daily diff (newly credentialed, completed Litmos, status
   // moves, new/resolved issues, etc.). Pure function lives in utils/dailyDiff
   // and is unit-tested. Returns null when fewer than 2 days of history exist.
@@ -254,6 +362,17 @@ export default function ProductionReadinessChecker() {
       // prodAgents useMemos have recomputed against the new raw data.
       // No-op if env vars aren't configured.
       setPendingSultoPush(true);
+      // Ask the browser to keep IndexedDB even under storage pressure.
+      // Idempotent — safe to call on every Analyze.
+      requestPersistentStorage().then(status => {
+        if (status === "granted") {
+          setStoragePersistent(true);
+          toast.info("Persistent storage granted — your data won't be evicted");
+        } else if (status === "persistent") {
+          setStoragePersistent(true);
+        }
+        // "denied" / "unsupported" — silent; user can still use the tool
+      });
     } catch (e) {
       console.error("handleProcess failed:", e);
       toast.error(`Analysis failed: ${e.message}`);
@@ -719,26 +838,33 @@ export default function ProductionReadinessChecker() {
     };
   }, [prodAgents]);
 
-  // Write the rich dated history entry once results have been computed.
-  // Guarded by a ref so we don't re-write when unrelated state changes.
-  // Triggers exactly once per Analyze cycle (savedAt changes on each run).
+  // Write the rich dated history entry once results have been computed,
+  // then mirror to the cloud KV store. Guarded by a ref so we don't re-write
+  // when unrelated state changes — fires exactly once per Analyze cycle
+  // (savedAt changes on each run).
   const lastHistoryWriteRef = useRef(null);
   useEffect(() => {
     if (!results || !savedAt) return;
     if (lastHistoryWriteRef.current === savedAt) return;
     lastHistoryWriteRef.current = savedAt;
+    const date = new Date(savedAt).toISOString().slice(0, 10);
     const agentSnapshot = buildAgentDigest(results, prodAgents);
-    saveHistoryEntry({
+    const entry = {
       savedAt,
+      date,
       agentSnapshot,
       stats: {
         pipelineTotal: results.length,
         productionTotal: prodAgents.length,
       },
-    })
+    };
+    saveHistoryEntry(entry)
       .then(() => loadHistory())
       .then(setHistory)
       .catch(e => console.error("History write failed:", e));
+    // Mirror to cloud (best-effort, doesn't block local write).
+    // No-op when env vars aren't set — see cloudSync.isCloudSyncConfigured().
+    pushHistoryToCloud(entry).catch(e => console.warn("Cloud sync push failed:", e));
   }, [results, prodAgents, savedAt]);
 
   // Fire-and-forget push to the Sulto receiver after a fresh Analyze.
@@ -1144,11 +1270,47 @@ export default function ProductionReadinessChecker() {
               {history.length > 1 && (
                 <span style={{ color: "#5c3d7a" }}>• {history.length} day{history.length > 1 ? "s" : ""} of history</span>
               )}
+              {/* Storage health badge — green when persistent, yellow when at risk */}
+              <span
+                style={{ color: storagePersistent ? "#4ade80" : "#FFE566" }}
+                title={storagePersistent
+                  ? "Persistent storage granted — IndexedDB won't be evicted under storage pressure"
+                  : "⚠ Storage is not persistent yet — browser may evict data under pressure. Click Analyze again or use Cloud Sync for durability."}
+              >
+                {storagePersistent ? "• 🔒 persistent" : "• ⚠ at-risk"}
+              </span>
+              {isCloudSyncConfigured() && (
+                <span style={{ color: "#8F68D3" }} title="Cloud sync is configured — every Analyze pushes a snapshot to Cloudflare KV">
+                  • ☁ cloud-synced
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {isStale(savedAt) && (
                 <span style={{ color: "#FFE566" }}>Re-upload today's files to refresh</span>
               )}
+              {isCloudSyncConfigured() && (
+                <button onClick={handleSyncFromCloud}
+                  className="px-2 py-0.5 rounded text-xs transition-all hover:brightness-110"
+                  style={{ background: "#794EC2", color: "#E8DFF6" }}
+                  title="Pull any history days from Cloudflare KV that aren't in your local IndexedDB. Useful when opening on a new device.">
+                  ☁ Sync from Cloud
+                </button>
+              )}
+              <button onClick={handleExportBackup}
+                className="px-2 py-0.5 rounded text-xs transition-all hover:brightness-110"
+                style={{ background: "#3d2057", color: "#b8a5d4" }}
+                title="Download a JSON backup of current snapshot + all history. Manual safety net.">
+                ↓ Export
+              </button>
+              <button onClick={handleImportBackupClick}
+                className="px-2 py-0.5 rounded text-xs transition-all hover:brightness-110"
+                style={{ background: "#3d2057", color: "#b8a5d4" }}
+                title="Restore from a previously-exported backup file. Merge mode — only adds dates not already local.">
+                ↑ Import
+              </button>
+              <input ref={importInputRef} type="file" accept=".json,application/json"
+                className="hidden" onChange={handleImportBackupFile} />
               <button onClick={() => handleClearCache(false)}
                 className="px-2 py-0.5 rounded text-xs transition-all hover:brightness-110"
                 style={{ background: "#3d2057", color: "#b8a5d4" }}

@@ -215,6 +215,87 @@ export function isStale(savedAt) {
   return saved.toDateString() !== now.toDateString();
 }
 
+/**
+ * Dump everything in the snapshot store — current + all history entries.
+ * Used by the Export Backup feature to produce a single restorable JSON file.
+ */
+export async function dumpAllStorage() {
+  try {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction(STORE, "readonly");
+      const store = t.objectStore(STORE);
+      const req = store.openCursor();
+      const out = { current: null, history: [] };
+      req.onsuccess = (ev) => {
+        const cursor = ev.target.result;
+        if (!cursor) return;
+        const key = cursor.key;
+        if (key === SNAPSHOT_KEY) out.current = cursor.value;
+        else if (typeof key === "string" && key.startsWith("history-")) out.history.push(cursor.value);
+        cursor.continue();
+      };
+      t.oncomplete = () => {
+        out.history.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+        resolve(out);
+      };
+      t.onerror = () => reject(t.error);
+    });
+  } catch (e) {
+    console.error("Failed to dump storage:", e);
+    return { current: null, history: [] };
+  }
+}
+
+/**
+ * Restore a backup payload into IndexedDB. Strategy:
+ *   - "merge"   (default): only adds dates not already present locally
+ *   - "replace":            overwrites everything (caller must confirm with user)
+ *
+ * Always overwrites the "current" snapshot if the backup has one.
+ *
+ * Returns { restoredHistory: number, replacedCurrent: boolean, skipped: number }.
+ */
+export async function restoreFromBackup(payload, mode = "merge") {
+  if (!payload || typeof payload !== "object") {
+    return { restoredHistory: 0, replacedCurrent: false, skipped: 0 };
+  }
+  const history = Array.isArray(payload.history) ? payload.history : [];
+  const current = payload.snapshot || null;
+
+  let restoredHistory = 0;
+  let replacedCurrent = false;
+  let skipped = 0;
+
+  if (mode === "replace") {
+    // Wipe history first so old entries not in backup are removed
+    await clearAllHistory();
+  }
+
+  // Read existing keys for merge-mode dedup
+  const existingDates = new Set();
+  if (mode === "merge") {
+    const existing = await loadHistory();
+    existing.forEach(e => { if (e.date) existingDates.add(e.date); });
+  }
+
+  await tx("readwrite", store => {
+    if (current) {
+      store.put(current, SNAPSHOT_KEY);
+      replacedCurrent = true;
+    }
+    for (const entry of history) {
+      const date = entry.date || (entry.savedAt ? new Date(entry.savedAt).toISOString().slice(0, 10) : null);
+      if (!date) { skipped++; continue; }
+      if (mode === "merge" && existingDates.has(date)) { skipped++; continue; }
+      store.put(entry, `history-${date}`);
+      restoredHistory++;
+    }
+  });
+
+  return { restoredHistory, replacedCurrent, skipped };
+}
+
 export function formatLoadedTime(savedAt) {
   if (!savedAt) return "";
   const d = new Date(savedAt);
