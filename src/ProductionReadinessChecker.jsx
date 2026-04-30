@@ -27,6 +27,7 @@ import { dedupCipData } from "./parsers/dedupCipData";
 import { resolveBgStatus } from "./parsers/resolveBgStatus";
 import { buildProdCampaignMaps, isInProdForCampaign, getProdCampaigns } from "./parsers/prodCampaigns";
 import { buildRemovalHistoryMap, annotateAgentRemoval } from "./parsers/parseRemovedExport";
+import { deriveLitmosCount, buildPeopleCompletionMap } from "./parsers/litmosCompletion";
 import Badge from "./components/Badge";
 import StatCard from "./components/StatCard";
 import CourseDot from "./components/CourseDot";
@@ -429,6 +430,12 @@ export default function ProductionReadinessChecker() {
     });
     const hasPeopleReport = litmosPeopleEmails.size > 0;
 
+    // Aggregate completion lookup from People Report — used as a fallback
+    // when an agent has a Litmos account but is missing from the per-course
+    // Course Data export (Litmos sometimes lags ~34 recently-created accounts).
+    // Without this, those agents wrongly show "0/14".
+    const peopleCompletionByEmail = buildPeopleCompletionMap(peopleData);
+
     // Course Data: per-course completion for the 14 required Litmos courses
     const litmosMap = {};
     const litmosEmailMap = {};
@@ -524,13 +531,18 @@ export default function ProductionReadinessChecker() {
 
       const ldata = findLitmos(name);
 
+      // Per-course display details — always sourced from Course Data when
+      // available (used for the per-course dots in the side panel). May be
+      // all-zero when Course Data is missing this agent; the aggregate
+      // litmosCount below has its own fallback chain.
       const litmosDone = REQUIRED_LITMOS.map(c => ({
         name: c,
         completed: ldata?.courses[c]?.completed || false,
         pct: ldata?.courses[c]?.pct || 0,
         date: ldata?.courses[c]?.date || "",
       }));
-      const litmosCount = litmosDone.filter(c => c.completed).length;
+      // litmosCount is computed below — after we know inLitmos &
+      // hasNameCollision so we can safely apply the People Report fallback.
 
       const cert = parseCertProgress(row.certification_progress || "");
       const shyftoffPct = cert.pct;
@@ -586,6 +598,33 @@ export default function ProductionReadinessChecker() {
       } else {
         inLitmos = ldata !== null;
       }
+
+      // Litmos completion count with fallback chain:
+      //   Course Data (per-course, exact)
+      //   → People Report aggregate % (estimate)
+      //   → 0 (truly missing)
+      // The fallback fixes a real bug where ~34 agents (e.g. Steve Melliz)
+      // are in the People Report at 90%+ but missing from the per-course
+      // Course Data export — they were showing as 0/14.
+      // Skip the fallback entirely on a name collision: we can't trust
+      // which Litmos account is theirs, so don't claim completion data.
+      let peopleCompletion = null;
+      if (hasPeopleReport && !hasNameCollision) {
+        const matchedUsernames = new Set();
+        nameKeyVariations(name).forEach(k => {
+          const users = litmosNameToUsernames.get(k) || [];
+          users.forEach(u => matchedUsernames.add(u));
+        });
+        if (matchedUsernames.size === 1) {
+          const [username] = matchedUsernames;
+          peopleCompletion = peopleCompletionByEmail.get(username) || null;
+        }
+      }
+      const litmosFallback = deriveLitmosCount(ldata, peopleCompletion, REQUIRED_LITMOS);
+      const litmosCount = litmosFallback.count;
+      const litmosCountEstimated = litmosFallback.estimated;
+      const litmosCountSource = litmosFallback.source;
+
       // BG status resolution (cross-source mismatch detection lives in resolveBgStatus).
       const bg = resolveBgStatus(row);
       const { bgStatus, bgCleared, cipBgProcess, cipBgReport, isBgMismatch, hasAccountIssue } = bg;
@@ -714,6 +753,7 @@ export default function ProductionReadinessChecker() {
         name, sid, status, key,
         nbEmail: ldata?.email || "",
         litmosCount, litmosDone, litmosTotal: 14,
+        litmosCountEstimated, litmosCountSource,
         shyftoffPct, shyftoffComplete, courseMap, certMap: cert.map,
         nbCertDone, flBlueDone, rosterCoursesDone,
         preProdDone, navCourseDone, nestingCoursesDone,
@@ -1753,8 +1793,15 @@ export default function ProductionReadinessChecker() {
                           {a.isProd ? (
                             <span className="text-xs" style={{ color: "#5c3d7a" }}>—</span>
                           ) : (
-                          <span className="font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.allLitmos ? "#4ade80" : a.litmosCount > 0 ? "#FFE566" : "#FF7866" }}>
-                            {a.litmosCount}/14
+                          <span className="font-bold inline-flex items-center gap-0.5"
+                            style={{ fontFamily: "'IBM Plex Mono', monospace", color: a.allLitmos ? "#4ade80" : a.litmosCount > 0 ? "#FFE566" : "#FF7866" }}
+                            title={a.litmosCountEstimated
+                              ? `Estimated from People Report aggregate %. Per-course data isn't in the Course Data export for this agent (likely a recently-added Litmos account).`
+                              : a.litmosCountSource === "people-report"
+                                ? `From People Report "Is All Courses Complete = TRUE". Per-course data unavailable in Course Data export.`
+                                : undefined}>
+                            {a.litmosCountEstimated ? "~" : ""}{a.litmosCount}/14
+                            {a.litmosCountEstimated && <span style={{ fontSize: 9, opacity: 0.7 }}>est</span>}
                           </span>
                           )}
                         </td>
@@ -2053,9 +2100,25 @@ export default function ProductionReadinessChecker() {
 
               {/* Litmos Courses */}
               <div className="px-4 py-3" style={{ borderBottom: "1px solid #3d2057" }}>
-                <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#7a5f9a" }}>
-                  Litmos Courses ({ag.litmosCount}/14)
+                <div className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-2" style={{ color: "#7a5f9a" }}>
+                  <span>Litmos Courses ({ag.litmosCountEstimated ? "~" : ""}{ag.litmosCount}/14)</span>
+                  {ag.litmosCountEstimated && (
+                    <span className="text-[9px] px-1.5 py-0 rounded normal-case" style={{ background: "#3d3000", color: "#FFE566", fontWeight: 600 }}>
+                      ESTIMATE
+                    </span>
+                  )}
+                  {ag.litmosCountSource === "people-report" && !ag.litmosCountEstimated && ag.allLitmos && (
+                    <span className="text-[9px] px-1.5 py-0 rounded normal-case" style={{ background: "#1a4d2e", color: "#4ade80", fontWeight: 600 }}>
+                      PEOPLE REPORT
+                    </span>
+                  )}
                 </div>
+                {ag.litmosCountSource && ag.litmosCountSource !== "course-data" && ag.inLitmos && (
+                  <div className="text-[10px] mb-2 px-2 py-1 rounded" style={{ background: "rgba(255,229,102,0.08)", border: "1px solid #3d3000", color: "#b8a5d4" }}>
+                    Per-course data isn't in today's Course Data export for this agent
+                    {ag.litmosCountEstimated ? ` — count is estimated from the People Report aggregate %.` : `. Showing People Report's authoritative completion answer instead.`}
+                  </div>
+                )}
                 <div className="space-y-1">
                   {ag.litmosDone.map((c, i) => (
                     <div key={i} className="flex items-center gap-2 text-xs">
