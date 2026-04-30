@@ -37,11 +37,13 @@ export async function pushHistoryToCloud(entry) {
   if (!isCloudSyncConfigured()) return "no-config";
   if (!entry || !entry.date) return "error";
   try {
+    // No keepalive — browser caps such requests at 64 KB and our digests
+    // (~600 agents × per-agent state) regularly exceed that, dropping the
+    // request silently with "TypeError: Failed to fetch".
     const r = await fetch(API_BASE, {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({ date: entry.date, payload: entry }),
-      keepalive: true,
     });
     if (!r.ok) {
       console.warn("Cloud sync push:", r.status, await r.text().catch(() => ""));

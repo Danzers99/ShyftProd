@@ -5,7 +5,13 @@
 // Behavior:
 //   - No-op when env vars aren't configured (e.g. local dev without .env)
 //   - Fire-and-forget: failures are logged, never thrown, never block UI
-//   - keepalive: true → the request completes even if the user navigates away
+//
+// Note: we do NOT use { keepalive: true } here. The browser caps keepalive
+// payloads at 64 KB and this snapshot routinely exceeds that (~600 agents
+// × per-agent annotation = 80–120 KB). The request would silently drop
+// with "TypeError: Failed to fetch" before sending. Without keepalive the
+// request runs as a normal POST — fine in practice because the user is
+// looking at the results page right after Analyze, not navigating away.
 //
 // Receiver expects schema: shyftprod-snapshot/v1
 // See: https://beelink.tailcbf816.ts.net:8443/healthz for liveness
@@ -136,7 +142,6 @@ export async function pushSnapshotToSulto(pipelineAgents, prodAgents) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
-      keepalive: true,
     });
     if (!r.ok) {
       const txt = await r.text().catch(() => "");
